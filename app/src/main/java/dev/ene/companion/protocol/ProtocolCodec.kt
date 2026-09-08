@@ -56,6 +56,13 @@ object ProtocolCodec {
         checkedString(normalized.toString(), MAX_WIRE_BYTES, limitCode = "message_too_large")
     }
 
+    /** QR·서버 정보에도 동일한 UTF-8·깊이·객체 검사를 적용한다. */
+    internal fun readObject(raw: String, maxBytes: Int): JsonObject = safe {
+        checkedString(raw, maxBytes)
+        checkDepth(raw)
+        obj(json.parseToJsonElement(raw))
+    }
+
     private fun obj(value: JsonElement?): JsonObject = value as? JsonObject ?: throw ProtocolException()
 
     private fun checkedString(value: String, maxBytes: Int? = null, nonblank: Boolean = false, limitCode: String = "invalid_message"): String {
@@ -76,19 +83,19 @@ object ProtocolCodec {
         return value
     }
 
-    private fun text(value: JsonElement?, maxBytes: Int? = null, nonblank: Boolean = false, limitCode: String = "invalid_message"): String {
+    internal fun text(value: JsonElement?, maxBytes: Int? = null, nonblank: Boolean = false, limitCode: String = "invalid_message"): String {
         val primitive = value as? JsonPrimitive ?: throw ProtocolException()
         if (!primitive.isString) throw ProtocolException()
         return checkedString(primitive.content, maxBytes, nonblank, limitCode)
     }
 
-    private fun uuid(value: JsonElement?): String {
+    internal fun uuid(value: JsonElement?): String {
         val value = text(value)
         if (!uuidPattern.matches(value)) throw ProtocolException()
         return UUID.fromString(value).toString()
     }
 
-    private fun integer(value: JsonElement?, minimum: Long = 0, maximum: Long = MAX_SAFE_INTEGER): Long {
+    internal fun integer(value: JsonElement?, minimum: Long = 0, maximum: Long = MAX_SAFE_INTEGER): Long {
         val primitive = value as? JsonPrimitive ?: throw ProtocolException()
         if (primitive.isString || !Regex("-?(0|[1-9][0-9]*)").matches(primitive.content)) throw ProtocolException()
         val number = primitive.content.toLongOrNull() ?: throw ProtocolException()
@@ -114,7 +121,7 @@ object ProtocolCodec {
         return JsonArray(result.map(::JsonPrimitive))
     }
 
-    private fun credential(value: JsonElement?): String {
+    internal fun credential(value: JsonElement?): String {
         val value = text(value)
         if (!Regex("[A-Za-z0-9_-]{43}").matches(value)) throw ProtocolException()
         val decoded = Base64.getUrlDecoder().decode(value)
@@ -122,7 +129,7 @@ object ProtocolCodec {
         return value
     }
 
-    private fun utc(value: JsonElement?): String {
+    internal fun utc(value: JsonElement?): String {
         val value = text(value)
         if (!utcPattern.matches(value) || value.startsWith("0000")) throw ProtocolException()
         OffsetDateTime.parse(value)

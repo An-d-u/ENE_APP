@@ -5,6 +5,17 @@ plugins {
     alias(libs.plugins.kotlin.serialization)
 }
 
+// 기기 시험에 고정 만료 인증서나 개인키를 커밋하지 않는다.
+val tlsTestAssets = layout.buildDirectory.dir("generated/tlsTestAssets")
+val generateTlsTestCa by tasks.registering(Exec::class) {
+    inputs.file(rootProject.file("tools/GenerateTestCa.java"))
+    outputs.dir(tlsTestAssets)
+    outputs.upToDateWhen { false }
+    val javaName = if (System.getProperty("os.name").startsWith("Windows")) "java.exe" else "java"
+    commandLine(file("${System.getProperty("java.home")}/bin/$javaName"), "-Dfile.encoding=UTF-8",
+        rootProject.file("tools/GenerateTestCa.java"), tlsTestAssets.get().file("ca.der").asFile)
+}
+
 android {
     namespace = "dev.ene.companion"
     compileSdk = 36
@@ -35,6 +46,11 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
     sourceSets["test"].resources.srcDir(rootProject.file("contracts/companion/v1"))
+    sourceSets["androidTest"].assets.srcDir(tlsTestAssets)
+}
+
+tasks.configureEach {
+    if (name.startsWith("merge") && name.endsWith("AndroidTestAssets")) dependsOn(generateTlsTestCa)
 }
 
 kotlin {
@@ -53,8 +69,13 @@ dependencies {
     implementation(libs.lifecycle.viewmodel.compose)
     implementation(libs.lifecycle.process)
     implementation(libs.serialization.json)
+    implementation(libs.coroutines.android)
+    implementation(libs.okhttp)
 
     testImplementation(libs.junit)
+    testImplementation(libs.coroutines.test)
+    testImplementation(libs.mockwebserver)
+    testImplementation(libs.okhttp.tls)
     androidTestImplementation(platform(libs.compose.bom))
     androidTestImplementation(libs.compose.ui.test.junit4)
     androidTestImplementation(libs.androidx.test.runner)
