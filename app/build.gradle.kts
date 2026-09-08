@@ -52,6 +52,7 @@ dependencies {
     implementation(libs.lifecycle.runtime.compose)
     implementation(libs.lifecycle.viewmodel.compose)
     implementation(libs.lifecycle.process)
+    implementation(libs.serialization.json)
 
     testImplementation(libs.junit)
     androidTestImplementation(platform(libs.compose.bom))
