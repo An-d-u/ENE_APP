@@ -1,0 +1,21 @@
+# 개인 환경과 빌드 산출물은 저장소에 포함하지 않는다.
+local.properties
+.gradle/
+.kotlin/
+**/build/
+.idea/
+*.iml
+*.apk
+*.aab
+*.jks
+*.keystore
+.env*
+keystore.properties
+*.log
+captures/
+.externalNativeBuild/
+.cxx/
+
+# 공식 Gradle Wrapper JAR만 빌드 도구로 추적한다.
+*.jar
+!gradle/wrapper/gradle-wrapper.jar
