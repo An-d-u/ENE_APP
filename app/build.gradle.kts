@@ -78,6 +78,7 @@ dependencies {
     implementation(libs.camera.lifecycle)
     implementation(libs.camera.view)
     implementation(libs.mlkit.barcode)
+    implementation(libs.webkit)
 
     testImplementation(libs.junit)
     testImplementation(libs.coroutines.test)
