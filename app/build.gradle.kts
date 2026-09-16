@@ -51,6 +51,9 @@ android {
 
 tasks.configureEach {
     if (name.startsWith("merge") && name.endsWith("AndroidTestAssets")) dependsOn(generateTlsTestCa)
+    // Lint도 계측 assets를 읽는다. 검사와 시험 APK를 함께 빌드할 때 생성 순서를 보장한다.
+    if ((name.startsWith("lintAnalyze") && name.endsWith("AndroidTest")) ||
+        (name.startsWith("generate") && name.endsWith("AndroidTestLintModel"))) dependsOn(generateTlsTestCa)
 }
 
 kotlin {
@@ -71,6 +74,10 @@ dependencies {
     implementation(libs.serialization.json)
     implementation(libs.coroutines.android)
     implementation(libs.okhttp)
+    implementation(libs.camera.camera2)
+    implementation(libs.camera.lifecycle)
+    implementation(libs.camera.view)
+    implementation(libs.mlkit.barcode)
 
     testImplementation(libs.junit)
     testImplementation(libs.coroutines.test)

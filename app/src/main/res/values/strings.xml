@@ -1,6 +1,4 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">ENE 동반 앱</string>
-    <string name="bootstrap_status">연결 기능 준비 중</string>
-    <string name="bootstrap_description">개발용 빌드 확인 화면입니다. 아직 PC 연결과 대화 기능은 제공하지 않습니다.</string>
 </resources>

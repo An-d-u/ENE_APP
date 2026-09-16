@@ -39,7 +39,7 @@ interface CompanionSocket {
     fun cancel()
 }
 
-interface ConnectionTransport : InfoProbe {
+interface ConnectionTransport : InfoProbe, Closeable {
     suspend fun open(endpoint: Endpoint, expectedServerId: String, token: String?, pairing: Boolean): CompanionSocket
 }
 
@@ -98,7 +98,7 @@ private class OkHttpSocket(private val tls: TlsClient, private val onRelease: (O
     private val native = AtomicReference<WebSocket?>()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val watching = AtomicBoolean()
-    val inbox = SocketInbox(onFailure = { native.get()?.cancel(); scope.cancel(); onRelease(this) })
+    val inbox = SocketInbox(maxItems = 128, maxBytes = 2_097_152, onFailure = { native.get()?.cancel(); scope.cancel(); onRelease(this) })
 
     fun attach(socket: WebSocket) {
         native.set(socket)
