@@ -2,6 +2,7 @@ package dev.ene.companion.connection
 
 import dev.ene.companion.protocol.ProtocolCodec
 import dev.ene.companion.protocol.WireMessage
+import dev.ene.companion.protocol.ExtensionContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -41,6 +42,9 @@ interface CompanionSocket {
 
 interface ConnectionTransport : InfoProbe, Closeable {
     suspend fun open(endpoint: Endpoint, expectedServerId: String, token: String?, pairing: Boolean): CompanionSocket
+    val supportsAudio: Boolean get() = false
+    fun audio(token: String, context: ExtensionContext, isCurrent: () -> Boolean): AudioMedia =
+        throw ConnectionException("audio_unsupported")
 }
 
 /** OkHttp가 callback까지 읽은 뒤의 메모리와 처리 대기열을 제한한다. */
@@ -142,6 +146,13 @@ class OkHttpTransport(private val trust: TrustedServer) : ConnectionTransport, C
     private var binding: TlsClient? = null
     private var closed = false
     private val sockets = ConcurrentHashMap.newKeySet<OkHttpSocket>()
+    override val supportsAudio = true
+
+    @Synchronized override fun audio(token: String, context: ExtensionContext, isCurrent: () -> Boolean): AudioMedia {
+        val tls = binding ?: throw ConnectionException("connection_closed")
+        if (closed || sockets.isEmpty() || !isCurrent()) throw ConnectionException("connection_closed")
+        return MediaTransport(tls, token, context, isCurrent)
+    }
 
     @Synchronized private fun bind(endpoint: Endpoint): TlsClient {
         if (closed) throw ConnectionException("connection_closed")

@@ -30,4 +30,10 @@ class PairingPermissionTest {
         compose.onNodeWithText("현재 전체 대화를 가져오고 있습니다 · 전송 대기").assertIsDisplayed()
         compose.onNodeWithText("등록한 PC의 인증서와 일치하지 않아 연결을 차단했습니다. 주소 또는 PC의 새 QR을 확인해 주세요.").assertIsDisplayed()
     }
+
+    @Test fun phoneAudioOutputIsExplainedWithoutManualSelector() {
+        compose.setContent { MaterialTheme { ConnectionStatus(ConnectionViewState(phase = ConnectionPhase.CONNECTED, audioOutput = "phone")) } }
+        compose.onNodeWithText("휴대폰에서 음성 재생 중").assertIsDisplayed()
+        compose.onNodeWithText("음성 출력 선택").assertDoesNotExist()
+    }
 }

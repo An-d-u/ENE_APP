@@ -9,6 +9,49 @@ import org.junit.Test
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class SessionExchangeTest {
+    @Test fun mediaAndResyncHeadersDoNotWaitForSnapshotConsumer() = runTest {
+        val socket = ConnectionRepositoryTest.Socket()
+        val extensions = mutableListOf<ExtensionMessage>()
+        val headers = mutableListOf<WireMessage>()
+        val consumed = mutableListOf<WireMessage>()
+        val job = backgroundScope.launch {
+            exchangeSession(socket, { testScheduler.currentTime }, {},
+                onExtension = extensions::add, onBaseHeader = headers::add,
+            ) { delay(2000); consumed += it }
+        }
+        val first = SessionFixtures.frames().first()
+        val reset = ResyncRequired(ConnectionRepositoryTest.epoch, ConnectionRepositoryTest.conversation, "reset")
+        val status = AudioStatus(1, ConnectionRepositoryTest.epoch, ConnectionRepositoryTest.pairingId, "auto", "ready")
+        socket.offer(first); runCurrent()
+        socket.offer(status); socket.offer(reset); socket.offer(Ping(ConnectionRepositoryTest.pairingId)); runCurrent()
+        assertEquals(listOf(status), extensions)
+        assertEquals(listOf(first, reset), headers)
+        assertTrue(consumed.isEmpty())
+        assertEquals(Pong(ConnectionRepositoryTest.pairingId), socket.sent.single())
+        job.cancelAndJoin()
+    }
+
+    @Test fun mediaBurstHasSeparateRateBoundAndSocketEndNotifiesImmediately() = runTest {
+        val socket = ConnectionRepositoryTest.Socket()
+        var received = 0
+        var closed = 0
+        var failure: String? = null
+        val job = backgroundScope.launch {
+            try {
+                exchangeSession(socket, { testScheduler.currentTime }, {},
+                    onExtension = { received++ }, onClosed = { closed++ },
+                ) { delay(2000) }
+            } catch (error: ConnectionException) { failure = error.code }
+        }
+        val status = AudioStatus(1, ConnectionRepositoryTest.epoch, ConnectionRepositoryTest.pairingId, "auto", "ready")
+        repeat(61) { socket.offer(status) }
+        runCurrent()
+        assertEquals(60, received)
+        assertEquals(1, closed)
+        assertEquals("extension_rate_limited", failure)
+        job.cancelAndJoin()
+    }
+
     @Test fun gracefulEndDrainsLastFrameBeforeReportingDisconnection() = runTest {
         val socket = ConnectionRepositoryTest.Socket()
         val frames = mutableListOf<WireMessage>()

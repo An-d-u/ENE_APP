@@ -14,13 +14,17 @@ import java.io.IOException
 import java.util.concurrent.TimeUnit
 import kotlin.math.min
 
+interface AudioMedia : Closeable {
+    suspend fun readAudio(ref: AudioRef, sampleRate: Int, channels: Int, onChunk: suspend (PcmSlice) -> Unit): Long
+}
+
 /** 주 WSS와 동일한 TLS binding을 빌린다. close는 이 연결의 HTTP만 중단한다. */
 internal class MediaTransport(
     private val tls: TlsClient,
     credential: String,
     private val context: ExtensionContext,
     private val isCurrent: () -> Boolean,
-) : Closeable {
+) : AudioMedia {
     private val token = ProtocolCodec.credential(JsonPrimitive(credential))
     private var closed = false
     private var active: Call? = null
@@ -77,7 +81,7 @@ internal class MediaTransport(
     }
 
     /** callback은 구간을 처리한 뒤 반환한다. 같은 scratch가 재사용되므로 참조를 보관하지 않는다. */
-    suspend fun readAudio(
+    override suspend fun readAudio(
         ref: AudioRef, sampleRate: Int, channels: Int, onChunk: suspend (PcmSlice) -> Unit,
     ): Long = withContext(Dispatchers.IO) {
         if (sampleRate !in 8000..48000 || channels !in 1..2) throw ConnectionException("unsupported_format")

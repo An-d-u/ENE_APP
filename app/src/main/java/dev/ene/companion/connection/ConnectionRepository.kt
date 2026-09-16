@@ -3,12 +3,14 @@ package dev.ene.companion.connection
 import dev.ene.companion.pairing.PairingQr
 import dev.ene.companion.protocol.*
 import dev.ene.companion.storage.*
+import dev.ene.companion.audio.AudioPlatform
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.io.Closeable
+import java.util.concurrent.atomic.AtomicBoolean
 
 /** 앱 수명에 하나만 둔다. 전환은 직렬화하고 이전 연결/저장 작업 회수 후 다음 연결을 연다. */
 class ConnectionRepository(
@@ -21,19 +23,29 @@ class ConnectionRepository(
     private val nowMillis: () -> Long = { System.nanoTime() / 1_000_000 },
     private val wallClock: () -> Long = System::currentTimeMillis,
     private val jitter: () -> Double = { kotlin.random.Random.nextDouble() },
+    private val audioPlatform: AudioPlatform? = null,
 ) : Closeable {
     private val scope = CoroutineScope(SupervisorJob() + dispatcher)
     private val transition = Mutex()
     private val mutableState = MutableStateFlow(ConnectionViewState())
     val state = mutableState.asStateFlow()
     private var foreground = false
+    private var resumedActivity = false
     private var generation = 0L
     private var connection: Job? = null
     private var drafts = DraftOutbox()
     private class Active(val credentials: DeviceCredentials, val session: ConversationSession, val socket: CompanionSocket) {
         var responseDeadline: Long? = null
+        val mediaCurrent = AtomicBoolean(true)
+        var extensions: ExtensionSession? = null
     }
     private var active: Active? = null
+
+    /** Activity의 Main 콜백에서 즉시 호출한다. 느린 저장 작업의 mutex 뒤로 미루지 않는다. */
+    fun activityResumed(value: Boolean, changingConfigurations: Boolean = false) {
+        resumedActivity = value
+        active?.extensions?.resumed(value, changingConfigurations)
+    }
 
     fun editDraft(text: String): Job = command { drafts.edit(text); publishDraft() }
     fun sendDraft(): Job = command {
@@ -169,14 +181,30 @@ class ConnectionRepository(
                     val endpoint = EndpointResolver(transport).resolve(credentials.serverId, profile.addresses)
                     val socket = transport.open(endpoint, credentials.serverId, credentials.token, pairing = false)
                     try {
+                        val requested = if (audioPlatform != null && transport.supportsAudio) listOf("audio_pcm_v1") else emptyList()
                         val ready = withTimeout(5000) {
-                            if (!socket.send(Hello())) throw ConnectionException("connection_closed")
+                            if (!socket.send(Hello(requested))) throw ConnectionException("connection_closed")
                             ProtocolCodec.decode(socket.receive()) as? Ready ?: throw ConnectionException("invalid_server_info")
                         }
                         if (ready.server_id != credentials.serverId || ready.registration_generation != credentials.generation) throw ConnectionException("registration_changed")
-                        mutableState.value = mutableState.value.copy(phase = ConnectionPhase.SYNCING, endpoint = endpoint, errorCode = null)
+                        if (ready.capabilities.any { it !in requested }) throw ConnectionException("invalid_server_info")
+                        mutableState.value = mutableState.value.copy(phase = ConnectionPhase.SYNCING, endpoint = endpoint, errorCode = null,
+                            audioOutput = if ("audio_pcm_v1" in ready.capabilities) "pc" else "unsupported")
                         val session = ConversationSession(ready, nowMillis)
-                        active = Active(credentials, session, socket)
+                        val record = Active(credentials, session, socket)
+                        active = record
+                        val extensions = audioPlatform?.takeIf { transport.supportsAudio }?.let { platform ->
+                            ExtensionSession(ready, CoroutineScope(currentCoroutineContext()),
+                                mediaFactory = { context -> transport.audio(credentials.token, context, record.mediaCurrent::get) },
+                                platform = platform, send = socket::send, nowMillis = nowMillis,
+                                isPublicAssistant = { id -> mutableState.value.messages.any { it.id == id && it.role == "assistant" } },
+                                onOutput = { output -> if (active === record) mutableState.value = mutableState.value.copy(audioOutput = output) },
+                                onFailure = { socket.cancel() },
+                            ).also { record.extensions = it; it.resumed(resumedActivity) }
+                        }
+                        var pendingSyncHeaders = 0
+                        var headerEpoch = ready.server_epoch
+                        var headerConversation = ready.conversation_id
                         if (!socket.send(drafts.syncRequest(credentials, session))) throw ConnectionException("connection_closed")
                         publishDraft()
                         exchangeSession(socket, nowMillis, {
@@ -186,9 +214,20 @@ class ConnectionRepository(
                                 val deadline = current.responseDeadline ?: (nowMillis() + 10_000).also { current.responseDeadline = it }
                                 if (nowMillis() >= deadline) throw ConnectionException("request_status_timeout")
                             } else current.responseDeadline = null
+                        }, onExtension = { extensions?.receive(it) }, onBaseHeader = { header ->
+                            when (header) {
+                                is ResyncRequired -> { headerEpoch = header.server_epoch; headerConversation = header.conversation_id; pendingSyncHeaders++ }
+                                is SnapshotBegin -> { headerEpoch = header.server_epoch; headerConversation = header.conversation_id; pendingSyncHeaders++ }
+                                else -> Unit
+                            }
+                            if (pendingSyncHeaders > 0) extensions?.baseState(headerEpoch, headerConversation, false)
+                        }, onClosed = {
+                            record.mediaCurrent.set(false)
+                            extensions?.shutdown()
                         }) { frame ->
                             if (frame is ErrorMessage) throw ConnectionException(frame.code)
                             val needsSync = withContext(decodeDispatcher) { session.consume(frame) }
+                            if (frame is ResyncRequired || frame is SnapshotBegin) pendingSyncHeaders--
                             if (needsSync && !socket.send(drafts.syncRequest(credentials, session))) throw ConnectionException("connection_closed")
                             if (frame is RequestStatus) drafts.status(frame)
                             if (session.syncing) show(ConnectionPhase.SYNCING)
@@ -201,9 +240,18 @@ class ConnectionRepository(
                                 }
                                 backoff.reset()
                             }
+                            if (pendingSyncHeaders > 0) extensions?.baseState(headerEpoch, headerConversation, false)
+                            else extensions?.baseState(session.serverEpoch, session.conversationId, !session.syncing)
                             publishDraft()
                         }
-                    } finally { active = null; socket.cancel() }
+                    } finally {
+                        val closing = active
+                        closing?.mediaCurrent?.set(false)
+                        closing?.extensions?.shutdown()
+                        closing?.extensions?.closeAndJoin()
+                        if (active === closing) active = null
+                        socket.cancel()
+                    }
                 }
             } catch (error: TimeoutCancellationException) {
                 currentCoroutineContext().ensureActive()
@@ -229,6 +277,8 @@ class ConnectionRepository(
 
     private suspend fun stopConnection() {
         generation++
+        active?.mediaCurrent?.set(false)
+        active?.extensions?.shutdown()
         connection?.cancelAndJoin()
         connection = null
     }
@@ -237,7 +287,11 @@ class ConnectionRepository(
         mutableState.value = mutableState.value.copy(phase = phase, errorCode = error)
     }
 
-    override fun close() { scope.cancel() }
+    override fun close() {
+        active?.mediaCurrent?.set(false)
+        active?.extensions?.shutdown()
+        scope.cancel()
+    }
 
     companion object {
         private val RETRYABLE = setOf("pc_unreachable", "connection_closed", "heartbeat_timeout", "slow_consumer", "snapshot_timeout", "invalid_snapshot", "request_status_timeout", "sync_required")

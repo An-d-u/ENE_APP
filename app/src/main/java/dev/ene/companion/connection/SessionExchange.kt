@@ -8,11 +8,16 @@ internal suspend fun exchangeSession(
     socket: CompanionSocket,
     nowMillis: () -> Long,
     checkTimeout: () -> Unit,
+    onExtension: ((ExtensionMessage) -> Unit)? = null,
+    onBaseHeader: (WireMessage) -> Unit = {},
+    onClosed: () -> Unit = {},
     consume: suspend (WireMessage) -> Unit,
 ): Nothing = coroutineScope {
     // 전송 callback 큐 128개/2MiB와 합쳐 대기 상한을 256개/4MiB로 유지한다.
     val inbox = SocketInbox(maxItems = 128, maxBytes = 2_097_152, onFailure = socket::cancel)
     val heartbeat = Heartbeat(nowMillis)
+    var extensionTokens = 60.0
+    var extensionClock = nowMillis()
     val heartbeatJob = launch {
         while (isActive) {
             delay(250)
@@ -26,7 +31,22 @@ internal suspend fun exchangeSession(
                 when (val frame = ProtocolCodec.decode(raw)) {
                     is Ping -> if (!socket.send(Pong(frame.nonce))) throw ConnectionException("connection_closed")
                     is Pong -> heartbeat.pong(frame.nonce)
-                    else -> inbox.offer(raw)
+                    is ExtensionMessage -> {
+                        if (onExtension == null) inbox.offer(raw) else {
+                            val now = nowMillis()
+                            extensionTokens = minOf(60.0, extensionTokens +
+                                (now - extensionClock).coerceAtLeast(0) * 30.0 / 1000)
+                            extensionClock = maxOf(extensionClock, now)
+                            if (extensionTokens < 1) throw ConnectionException("extension_rate_limited")
+                            extensionTokens--
+                            // 큰 snapshot 소비와 별개로 처리한다. callback은 기다리는 작업을 하지 않는다.
+                            onExtension(frame)
+                        }
+                    }
+                    else -> {
+                        onBaseHeader(frame)
+                        inbox.offer(raw)
+                    }
                 }
                 yield()
             }
@@ -36,7 +56,7 @@ internal suspend fun exchangeSession(
             // 상한 초과 실패가 이미 기록되었다면 finish가 그 원인을 덮지 않는다.
             heartbeatJob.cancel()
             inbox.finish()
-        }
+        } finally { onClosed() }
     }
     try {
         while (true) {

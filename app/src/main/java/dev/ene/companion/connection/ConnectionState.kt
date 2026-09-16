@@ -17,6 +17,7 @@ data class ConnectionViewState(
     val processing: ProcessingState = ProcessingState("idle"),
     val draft: String = "",
     val sendState: String? = null,
+    val audioOutput: String = "pc",
 ) {
     val canSend: Boolean get() = phase == ConnectionPhase.CONNECTED && processing.phase == "idle" && sendState == null && draft.isNotBlank()
     override fun toString(): String = "ConnectionViewState(phase=$phase)"

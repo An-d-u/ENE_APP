@@ -101,6 +101,11 @@ fun ConnectionStatus(state: ConnectionViewState) {
             ConnectionPhase.PAUSED -> "연결이 일시 중지되었습니다"
             ConnectionPhase.ACTION_REQUIRED -> "연결을 확인해 주세요"
         }, style = MaterialTheme.typography.titleSmall)
+        if (state.phase == ConnectionPhase.CONNECTED) Text(when (state.audioOutput) {
+            "phone" -> "휴대폰에서 음성 재생 중"
+            "unsupported" -> "휴대폰 음성 미지원 · PC에서 출력"
+            else -> "PC 출력 · 휴대폰 준비 시 자동 전환"
+        }, style = MaterialTheme.typography.bodySmall)
         state.errorCode?.let { Text(errorDescription(it), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
         if (state.messages.isNotEmpty() && state.phase != ConnectionPhase.CONNECTED) Text("마지막으로 받은 대화입니다. 동기화가 끝나면 갱신됩니다.", style = MaterialTheme.typography.bodySmall)
     }
