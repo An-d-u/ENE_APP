@@ -6,7 +6,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -25,11 +25,13 @@ internal fun characterPanelHeight(heightDp: Int, keyboard: Boolean, fontScale: F
 fun CharacterPanel(repository: ConnectionRepository) {
     val state by repository.characterState.collectAsStateWithLifecycle()
     val density = LocalDensity.current
-    val height = characterPanelHeight(LocalConfiguration.current.screenHeightDp,
+    val height = characterPanelHeight((LocalWindowInfo.current.containerSize.height / density.density).toInt(),
         WindowInsets.ime.getBottom(density) > 0, density.fontScale)
     val visible = state.status in setOf("rendering", "ready", "refreshing")
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
         CharacterStatus(state, visible && height == 0, repository::retryCharacter)
+        TextButton(onClick = repository::openCharacterSettings, enabled = state.settings.available && !state.settings.busy,
+            modifier = Modifier.heightIn(min = 48.dp)) { Text("캐릭터 공통 설정") }
         if (visible && height > 0) key(state.viewGeneration) {
             AndroidView(
                 modifier = Modifier.fillMaxWidth().height(height.dp).semantics { contentDescription = "ENE 캐릭터" },
@@ -54,6 +56,8 @@ fun CharacterPanel(repository: ConnectionRepository) {
             )
         }
     }
+    if (state.settings.open) CharacterSettingsSheet(state.settings, repository::closeCharacterSettings,
+        repository::previewCharacterSettings, repository::submitCharacterSettings)
 }
 
 @Composable

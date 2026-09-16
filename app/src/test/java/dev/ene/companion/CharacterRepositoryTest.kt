@@ -55,7 +55,7 @@ class CharacterRepositoryTest {
         val repo = repository(transport, CharacterPlatform(true) { _, _, _ -> throw CharacterException("synthetic_failure") })
         try {
             repo.activityResumed(true); repo.foreground(true); runCurrent()
-            assertEquals(transport.capabilities, transport.socket.sent.filterIsInstance<Hello>().single().capabilities)
+            assertEquals(listOf("audio_pcm_v1", "character_v1", "character_controls_v1"), transport.socket.sent.filterIsInstance<Hello>().single().capabilities)
             transport.snapshot(); advanceTimeBy(300); runCurrent()
             assertTrue(transport.socket.sent.filterIsInstance<AudioAvailability>().last().available)
             assertEquals("error", repo.characterState.value.status)

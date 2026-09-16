@@ -39,7 +39,8 @@ class CharacterSession(
     private var lastMouth: CharacterMouth? = null
     private var state = CharacterViewState()
     private var headPat: HeadPatSession? = null
-    private val timer = scope.launch { while (isActive) { delay(50); publishMouth(); headPat?.tick() } }
+    private var settings: CharacterSettingsState? = null
+    private val timer = scope.launch { while (isActive) { delay(50); publishMouth(); headPat?.tick(); settings?.tick(); publishSettings() } }
 
     private fun available() = !closed && !failed && context != null && activeScreen && synced &&
         platform.supported && "character_v1" in capabilities
@@ -48,6 +49,7 @@ class CharacterSession(
         if (closed) return
         activeScreen = value
         if (!value) {
+            settings?.available(false); publishSettings()
             headPat?.cancel()
             sequence.detached()
             if (!changingConfigurations) {
@@ -55,13 +57,14 @@ class CharacterSession(
                 publish("paused")
             }
         } else if (available()) {
-            if (currentLoad == null || state.status == "paused") requestLoad() else display()
+            if (currentLoad == null || state.status == "paused" || settings?.view?.busy == true) requestLoad() else display()
         }
     }
 
     fun baseState(epoch: String, conversation: String, synchronized: Boolean) {
         if (closed || epoch != ready.server_epoch) return
         if (this.conversation != conversation) {
+            settings?.close(); publishSettings()
             headPat?.cancel()
             this.conversation = conversation
             context = context?.copy(conversationId = conversation)
@@ -69,9 +72,9 @@ class CharacterSession(
         }
         val becameReady = !synced && synchronized
         synced = synchronized
-        if (!synchronized) { sequence.detached(); headPat?.cancel() }
+        if (!synchronized) { sequence.detached(); headPat?.cancel(); settings?.available(false); publishSettings() }
         if (becameReady && available()) {
-            if (currentLoad == null) requestLoad() else display()
+            if (currentLoad == null || settings?.view?.busy == true) requestLoad() else display()
         }
     }
 
@@ -84,6 +87,9 @@ class CharacterSession(
             context = candidate
             if ("character_controls_v1" in capabilities) {
                 headPat = HeadPatSession(candidate, send = { send(it) }, visual = { value -> render { it.post("head_pat", wire(value)) } }, nowMillis = nowMillis)
+                settings = CharacterSettingsState(candidate, send = { send(it) },
+                    showPreview = { snapshot -> if (available()) render { it.post("preview", snapshot.json) } },
+                    requestSnapshot = { if (available()) requestLoad() }, nowMillis = nowMillis)
             }
             if (available()) requestLoad()
             return
@@ -91,6 +97,7 @@ class CharacterSession(
         val current = context ?: return
         try { ExtensionCodec.validate(message, current, capabilities, "from_pc") } catch (_: ProtocolException) { return }
         when (message) {
+            is CharacterSettingsResult -> { settings?.receive(message); publishSettings() }
             is HeadPatState -> headPat?.receive(message, available() && state.status == "ready")
             is CharacterChanged -> if (sequence.changed(message.state_revision, message.model_version) && available()) requestLoad()
             is CharacterAction -> {
@@ -119,13 +126,14 @@ class CharacterSession(
 
     fun attach(value: CharacterRenderer) {
         if (closed) return
-        if (renderer !== value) headPat?.cancel()
+        if (renderer !== value) { headPat?.cancel(); settings?.close() }
         renderer = value; sequence.detached(); lastMouth = null
         if (available()) display()
     }
 
     fun detach(value: CharacterRenderer) {
         if (renderer !== value) return
+        settings?.close(); publishSettings()
         headPat?.cancel()
         renderer = null; sequence.detached(); lastMouth = null
     }
@@ -188,6 +196,7 @@ class CharacterSession(
                         if (!sequence.install(loaded.snapshot)) { fail("character_state_stale"); return@launch }
                         currentLoad?.close()
                         currentLoad = loaded; loaded = null
+                        sequence.snapshot?.let { settings?.install(it) }
                         if (available()) display()
                     } catch (_: CancellationException) {
                         // 최신 대기 요청 하나가 앞 작업의 회수 후 실행된다.
@@ -220,12 +229,35 @@ class CharacterSession(
     }
 
     private fun publish(status: String, error: String? = null) {
-        val next = state.copy(status = status, errorCode = error)
+        settings?.available(available() && sequence.snapshot?.status == "ready")
+        val next = state.copy(status = status, errorCode = error,
+            settings = settingsView(status))
         if (next != state) { state = next; onState(next) }
         val snapshot = sequence.snapshot
         val enabled = snapshot?.json?.get("settings")?.jsonObject?.get("enable_head_pat")?.jsonPrimitive?.booleanOrNull ?: true
         headPat?.configure(snapshot?.modelVersion, available() && status == "ready" && enabled)
     }
+
+    private fun settingsView(status: String = state.status): CharacterSettingsViewState {
+        val value = settings?.view ?: return CharacterSettingsViewState()
+        // 큰 글자/키보드로 표시부를 접어도 확인된 모델의 설정까지 막지는 않는다.
+        val readyToEdit = status == "ready" || (status == "rendering" && renderer == null &&
+            currentLoad?.snapshot?.status == "ready" && !pending && download?.isActive != true)
+        return value.copy(available = value.available && available() && readyToEdit)
+    }
+
+    private fun publishSettings() {
+        val value = settingsView()
+        if (state.settings != value) { state = state.copy(settings = value); onState(state) }
+    }
+
+    fun openSettings() { if (settingsView().available) settings?.open(); publishSettings() }
+    fun closeSettings() { settings?.close(); publishSettings() }
+    fun previewSettings(key: String, value: JsonElement, parameter: Boolean) {
+        if (settingsView().available) settings?.preview(key, value, parameter)
+        publishSettings()
+    }
+    fun submitSettings() { if (settingsView().available) settings?.submit(); publishSettings() }
 
     private fun render(block: (CharacterRenderer) -> Unit) {
         val target = renderer ?: return

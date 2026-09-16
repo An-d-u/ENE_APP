@@ -28,7 +28,7 @@ class CharacterControls(private val commandId: () -> String = { UUID.randomUUID(
         phase = "editing"; lastResult = null
     }
 
-    fun submit(context: ExtensionContext, changes: JsonObject, parameters: JsonObject): CharacterSettingsPatch {
+    fun validate(changes: JsonObject, parameters: JsonObject): JsonObject {
         require(phase == "editing") { "character_settings_busy" }
         val current = baseline ?: throw CharacterException("character_unavailable")
         val clean = ExtensionCodec.normalizeSettings(changes)
@@ -47,6 +47,12 @@ class CharacterControls(private val commandId: () -> String = { UUID.randomUUID(
             val number = item.doubleOrNull
             require(!item.isString && number != null && number.isFinite() && number in bound.minimum..bound.maximum) { "invalid_parameters" }
         }
+        return clean
+    }
+
+    fun submit(context: ExtensionContext, changes: JsonObject, parameters: JsonObject): CharacterSettingsPatch {
+        val clean = validate(changes, parameters)
+        val current = requireNotNull(baseline)
         val patch = CharacterSettingsPatch(context.registrationGeneration, context.serverEpoch, context.connectionGeneration,
             current.modelVersion!!, commandId(), current.settingsRevision, clean, JsonObject(parameters.toMap()))
         // 전체 전송 크기와 UUID도 보내기 전에 검사한다.

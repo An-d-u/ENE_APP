@@ -10,7 +10,8 @@ interface CharacterRenderer {
     fun post(type: String, value: JsonObject)
 }
 
-data class CharacterViewState(val status: String = "unavailable", val errorCode: String? = null, val viewGeneration: Long = 0)
+data class CharacterViewState(val status: String = "unavailable", val errorCode: String? = null, val viewGeneration: Long = 0,
+    val settings: CharacterSettingsViewState = CharacterSettingsViewState())
 
 /** 렌더러와 디스크 경계를 시험 대역으로 교체할 수 있다. Application 단위로 한 번 생성한다. */
 class CharacterPlatform(val supported: Boolean,

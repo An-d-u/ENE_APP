@@ -10,6 +10,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.serialization.json.JsonElement
 import java.io.Closeable
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -72,6 +73,10 @@ class ConnectionRepository(
         if (characterRenderer === renderer) active?.character?.rendererFailed(renderer, code)
     }
     fun retryCharacter() { active?.character?.retry() }
+    fun openCharacterSettings() { active?.character?.openSettings() }
+    fun closeCharacterSettings() { active?.character?.closeSettings() }
+    fun previewCharacterSettings(key: String, value: JsonElement, parameter: Boolean) { active?.character?.previewSettings(key, value, parameter) }
+    fun submitCharacterSettings() { active?.character?.submitSettings() }
 
     fun editDraft(text: String): Job = command { drafts.edit(text); publishDraft() }
     fun sendDraft(): Job = command {
@@ -209,7 +214,9 @@ class ConnectionRepository(
                     try {
                         val requested = buildList {
                             if (audioPlatform != null && transport.supportsAudio) add("audio_pcm_v1")
-                            if (characterPlatform?.supported == true && transport.supportsCharacter) add("character_v1")
+                            if (characterPlatform?.supported == true && transport.supportsCharacter) {
+                                add("character_v1"); add("character_controls_v1")
+                            }
                         }
                         val ready = withTimeout(5000) {
                             if (!socket.send(Hello(requested))) throw ConnectionException("connection_closed")

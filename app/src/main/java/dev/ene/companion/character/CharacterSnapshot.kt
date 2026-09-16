@@ -82,6 +82,12 @@ class CharacterSnapshot private constructor(
             val expressions = ids(body["expression_ids"])
             val gestures = ids(body["gesture_ids"])
             val base = id(body["default_expression"])
+            val patDefaults = body["head_pat_defaults"]?.let(::obj) ?: buildJsonObject {
+                if (status == "ready") { put("active", "normal"); put("end", "normal") }
+            }
+            if (status == "ready") {
+                if (patDefaults.keys != setOf("active", "end") || patDefaults.values.any { id(it) !in expressions }) throw CharacterException("invalid_manifest")
+            } else if (patDefaults.isNotEmpty()) throw CharacterException("invalid_manifest")
             val assets = array(body["assets"]).map { value ->
                 val item = obj(value)
                 CharacterAsset(digest(item["id"]), digest(item["sha256"]),
@@ -128,6 +134,7 @@ class CharacterSnapshot private constructor(
                 put("model_id", modelId?.let(::JsonPrimitive) ?: JsonNull); put("entry_asset_id", entry?.let(::JsonPrimitive) ?: JsonNull)
                 put("runtime_version", runtime); put("state_revision", revision); put("settings_revision", settingsRevision); put("action_seq", actionSeq)
                 put("settings", settings); put("parameters", buildJsonObject { parameters.forEach { (key, value) -> put(key, value) } })
+                put("head_pat_defaults", patDefaults)
                 put("parameter_catalog", buildJsonArray { catalog.forEach { item -> add(buildJsonObject {
                     put("id", item.id); put("min", item.minimum); put("max", item.maximum); put("default", item.initial)
                 }) } })

@@ -16,8 +16,7 @@ class CharacterSessionTest {
     private val ready = Ready(audioId(9), audioId(1), audioId(3), 1, listOf("audio_pcm_v1", "character_v1"))
     private val payload = "{}".toByteArray()
     private fun snapshot() = CharacterSnapshot.parse(CharacterFixtures.manifest(payload))
-    private fun result(): CharacterLoad {
-        val model = snapshot()
+    private fun result(model: CharacterSnapshot = snapshot()): CharacterLoad {
         val cache = CharacterCache(temporary.newFolder())
         val mount = cache.begin("1".repeat(64), model).use { ticket ->
             ticket.open(model.entryAssetId!!).use { it.write(payload) }
@@ -55,6 +54,55 @@ class CharacterSessionTest {
         }
         fun rendered() = session.event(renderer, CharacterEvent("ready", snapshot().modelVersion))
         fun action(number: Long) = CharacterAction(1, audioId(1), audioId(2), snapshot().modelVersion!!, number, "gesture", "nod", 0)
+    }
+
+    @Test fun settingsPreviewUsesCurrentRendererAndSaveWaitsForServerSnapshot() = runTest {
+        var model = snapshot()
+        val f = Fixture(this, controls = true) { result(model) }
+        f.activate(); advanceTimeBy(300); runCurrent(); f.rendered()
+        f.session.openSettings()
+        repeat(10) { f.session.previewSettings("head_pat_strength", JsonPrimitive(1.0 + it / 10.0), false) }
+        assertEquals(0, f.sent.filterIsInstance<CharacterSettingsPatch>().size)
+        assertEquals(1, f.renderer.snapshots.size)
+        assertEquals(10, f.renderer.commands.count { it.first == "preview" })
+        f.session.submitSettings()
+        val patch = f.sent.filterIsInstance<CharacterSettingsPatch>().single()
+        assertTrue(f.states.last().settings.busy)
+        model = CharacterSnapshot.parse(JsonObject(model.json + mapOf("state_revision" to JsonPrimitive(2),
+            "settings_revision" to JsonPrimitive(2))).toString())
+        f.session.receive(CharacterSettingsResult(1, audioId(1), audioId(2), patch.command_id, "conflict", 2, "revision_conflict"))
+        advanceTimeBy(300); runCurrent(); f.rendered()
+        assertEquals("conflict", f.states.last().settings.result)
+        assertFalse(f.states.last().settings.busy)
+        f.session.resumed(false)
+        assertFalse(f.states.last().settings.open)
+        f.session.submitSettings()
+        assertEquals(1, f.sent.filterIsInstance<CharacterSettingsPatch>().size)
+        f.session.closeAndJoin()
+    }
+
+    @Test fun settingsTimeoutDuringRotationRefreshesOnResumeWithoutResending() = runTest {
+        var loads = 0
+        val f = Fixture(this, controls = true) { loads++; result() }
+        f.activate(); advanceTimeBy(300); runCurrent(); f.rendered()
+        f.session.openSettings(); f.session.previewSettings("head_pat_strength", JsonPrimitive(1.8), false); f.session.submitSettings()
+        f.session.resumed(false, changingConfigurations = true)
+        advanceTimeBy(10_100); runCurrent()
+        f.session.resumed(true); advanceTimeBy(300); runCurrent(); f.rendered()
+        assertEquals(2, loads)
+        assertFalse(f.states.last().settings.busy)
+        assertEquals(1, f.sent.filterIsInstance<CharacterSettingsPatch>().size)
+        f.session.closeAndJoin()
+    }
+
+    @Test fun collapsedCharacterStillAllowsConfirmedSettingsWithoutWebView() = runTest {
+        val f = Fixture(this, controls = true) { result() }
+        f.activate(); f.session.detach(f.renderer)
+        advanceTimeBy(300); runCurrent()
+        assertTrue(f.states.last().settings.available)
+        f.session.openSettings(); f.session.previewSettings("head_pat_strength", JsonPrimitive(1.8), false); f.session.submitSettings()
+        assertEquals(1, f.sent.filterIsInstance<CharacterSettingsPatch>().size)
+        f.session.closeAndJoin()
     }
 
     @Test fun renderingRequiresBaseSyncAndActionsAreNeverQueuedDuringLoad() = runTest {
