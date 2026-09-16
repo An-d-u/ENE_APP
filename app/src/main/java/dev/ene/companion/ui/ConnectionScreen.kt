@@ -41,6 +41,7 @@ fun ConnectionScreen(repository: ConnectionRepository) {
             } else if (state.phase == ConnectionPhase.ACTION_REQUIRED || state.phase == ConnectionPhase.RECONNECTING) {
                 TextButton(onClick = { repository.retry() }, modifier = Modifier.heightIn(min = 48.dp)) { Text("다시 연결") }
             }
+            if (state.phase == ConnectionPhase.CONNECTED) CharacterPanel(repository)
             val listState = rememberLazyListState()
             val nearEnd by remember { derivedStateOf { !listState.canScrollForward } }
             LaunchedEffect(state.messages.lastOrNull()?.id) {

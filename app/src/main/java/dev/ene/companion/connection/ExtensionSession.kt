@@ -16,11 +16,13 @@ internal class ExtensionSession(
     private val isPublicAssistant: (String) -> Boolean,
     private val onOutput: (String) -> Unit,
     private val onFailure: (String) -> Unit,
+    extraCapabilities: Set<String> = emptySet(),
+    private val onPlayback: (CharacterPlayback) -> Unit = {},
 ) {
     private val ownerJob = SupervisorJob(parentScope.coroutineContext[Job])
     private val scope = CoroutineScope(parentScope.coroutineContext + ownerJob)
     private val serialContext = scope.coroutineContext.minusKey(Job)
-    private val capabilities = ExtensionCodec.negotiate(ready.capabilities.toSet(), setOf("audio_pcm_v1"))
+    private val capabilities = ExtensionCodec.negotiate(ready.capabilities.toSet(), setOf("audio_pcm_v1") + extraCapabilities)
     private var context: ExtensionContext? = null
     private var conversationId = ready.conversation_id
     private var activeScreen = false
@@ -35,6 +37,7 @@ internal class ExtensionSession(
                         val focus: AudioFocusController, val media: AudioMedia) {
         var reader: Job? = null
         var totalFrames: Long? = null
+        var playedFrames = 0L
     }
     private var active: Entry? = null
     private var retiring: Job? = null
@@ -130,6 +133,7 @@ internal class ExtensionSession(
                     "play" -> try {
                         if (!entry.player.start()) { terminate(entry, "audio_start_failed"); return }
                         emit(ref.wire("audio_started") { put("played_frames", 0) })
+                        characterPlayback(entry, 0.0, true)
                         publishOutput()
                     } catch (_: Exception) { terminate(entry, "audio_start_failed") }
                     "send_cancel" -> terminate(entry, "start_timeout", "audio_cancel")
@@ -225,6 +229,7 @@ internal class ExtensionSession(
                 "send_cancel" -> { terminate(entry, "playback_timeout", "audio_cancel"); return }
             }
             val sample = entry.player.pump()
+            entry.playedFrames = sample.playedFrames
             val total = entry.totalFrames
             if (total != null && (entry.player.receivedFrames > total ||
                     (entry.player.sourceEnded && entry.player.receivedFrames != total))) {
@@ -239,6 +244,7 @@ internal class ExtensionSession(
                 }
             }
             if (active !== entry || entry.state.state != "PLAYING") return
+            characterPlayback(entry, sample.mouthOpen.toDouble(), true)
             when (entry.state.finishIfDrained(sample.playedFrames, entry.player.receivedFrames, total, entry.player.sourceEnded)) {
                 "send_finished" -> {
                     emit(entry.ref.wire("audio_finished") { put("played_frames", sample.playedFrames) })
@@ -261,6 +267,7 @@ internal class ExtensionSession(
             if (entry.state.state == "PREPARING") "audio_rejected" else "audio_cancel"
         } else notify
         active = null
+        characterPlayback(entry, 0.0, false)
         entry.state.deactivate()
         entry.player.stop()
         entry.focus.close()
@@ -274,6 +281,13 @@ internal class ExtensionSession(
     }
 
     private fun reject(ref: AudioRef, reason: String) = emit(ref.wire("audio_rejected") { put("reason", reason) })
+    private fun characterPlayback(entry: Entry, mouth: Double, active: Boolean) {
+        val ref = entry.ref
+        // 화면 오류가 실제 음성 재생을 중단시키지 않도록 표시 콜백은 별도 실패 경계에 둔다.
+        runCatching { onPlayback(CharacterPlayback(ref.registrationGeneration, ref.serverEpoch, ref.connectionGeneration,
+            ref.conversationId, ref.messageId, ref.utteranceId, "phone",
+            entry.playedFrames * 1000 / entry.player.sampleRate, mouth, active)) }
+    }
     private fun emit(message: WireMessage) {
         if (closed) return
         if (!runCatching { send(message) }.getOrDefault(false)) failConnection("connection_closed")

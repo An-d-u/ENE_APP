@@ -76,12 +76,14 @@ internal class AudioFixture(test: TestScope, makeMedia: () -> TestAudioMedia = :
     val sent = mutableListOf<WireMessage>()
     val outputs = mutableListOf<String>()
     val failures = mutableListOf<String>()
+    val playback = mutableListOf<CharacterPlayback>()
     var visible = true
     var sendThrows = false
     val extension = ExtensionSession(ready, test.backgroundScope,
         mediaFactory = { makeMedia().also(media::add) }, platform = platform,
         send = { if (sendThrows) throw IllegalStateException("synthetic"); sent += it; true }, nowMillis = { test.testScheduler.currentTime },
         isPublicAssistant = { visible && it == audioId(4) }, onOutput = outputs::add, onFailure = failures::add,
+        onPlayback = playback::add,
     )
     fun activate() {
         extension.receive(ExtensionsReady(1, audioId(1), audioId(2), listOf("audio_pcm_v1")))
@@ -95,6 +97,24 @@ internal class AudioFixture(test: TestScope, makeMedia: () -> TestAudioMedia = :
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class ExtensionSessionTest {
+    @Test fun characterReceivesOnlyStartedConsumedPcmAndImmediateStop() = runTest {
+        val f = AudioFixture(this)
+        try {
+            f.activate(); f.extension.receive(f.offer()); runCurrent()
+            f.media.single().chunks.send(ByteArray(9600) { if (it % 2 == 0) 0x10 else 0x27 }); runCurrent()
+            assertTrue(f.playback.none { it.active })
+            f.extension.receive(f.start()); runCurrent()
+            assertEquals(0L, f.playback.last().played_ms)
+            f.platform.sinks.single().head = 2400
+            advanceTimeBy(50); runCurrent()
+            assertEquals(100L, f.playback.last().played_ms)
+            assertTrue(f.playback.last().mouth_open > 0.0)
+            f.extension.resumed(false)
+            assertFalse(f.playback.last().active)
+            assertEquals(0.0, f.playback.last().mouth_open, .0001)
+        } finally { f.extension.closeAndJoin() }
+    }
+
     @Test fun contradictoryPendingEofAndDisabledStatusCannotStartLater() = runTest {
         for (disable in listOf(false, true)) {
             val f = AudioFixture(this)

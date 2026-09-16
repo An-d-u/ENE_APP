@@ -28,7 +28,7 @@ class CharacterWebView(
     private val onEvent: (CharacterEvent) -> Unit,
     private val onFailure: (String) -> Unit,
     bridgeSupported: Boolean = supported(),
-) : FrameLayout(context), Closeable {
+) : FrameLayout(context), Closeable, CharacterRenderer {
     internal var browser: WebView? = null
         private set
     private val bridge = CharacterBridge()
@@ -123,7 +123,7 @@ class CharacterWebView(
     }
 
     /** 호출자가 가진 핀은 유지한다. 뷰는 별도 핀을 취득해 회전/교체 때 정확히 해제한다. */
-    fun show(snapshot: CharacterSnapshot, character: CharacterCache.CachedCharacter?) {
+    override fun show(snapshot: CharacterSnapshot, character: CharacterCache.CachedCharacter?) {
         mainThread()
         if (closed || browser == null) return
         require((snapshot.status == "ready") == (character != null)) { "invalid_character_mount" }
@@ -139,7 +139,7 @@ class CharacterWebView(
         if (documentReady) post("snapshot", snapshot.json)
     }
 
-    fun post(type: String, value: JsonObject) {
+    override fun post(type: String, value: JsonObject) {
         mainThread()
         if (closed || !documentReady) return
         try { send(bridge.command(type, value)) } catch (_: IllegalArgumentException) { fail("character_render_failed") }

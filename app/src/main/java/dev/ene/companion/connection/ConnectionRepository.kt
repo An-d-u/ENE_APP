@@ -4,6 +4,7 @@ import dev.ene.companion.pairing.PairingQr
 import dev.ene.companion.protocol.*
 import dev.ene.companion.storage.*
 import dev.ene.companion.audio.AudioPlatform
+import dev.ene.companion.character.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -24,11 +25,16 @@ class ConnectionRepository(
     private val wallClock: () -> Long = System::currentTimeMillis,
     private val jitter: () -> Double = { kotlin.random.Random.nextDouble() },
     private val audioPlatform: AudioPlatform? = null,
+    private val characterPlatform: CharacterPlatform? = null,
 ) : Closeable {
     private val scope = CoroutineScope(SupervisorJob() + dispatcher)
     private val transition = Mutex()
     private val mutableState = MutableStateFlow(ConnectionViewState())
     val state = mutableState.asStateFlow()
+    private val mutableCharacterState = MutableStateFlow(CharacterViewState())
+    val characterState = mutableCharacterState.asStateFlow()
+    private var characterRenderer: CharacterRenderer? = null
+    private var characterViewGeneration = 0L
     private var foreground = false
     private var resumedActivity = false
     private var generation = 0L
@@ -38,6 +44,8 @@ class ConnectionRepository(
         var responseDeadline: Long? = null
         val mediaCurrent = AtomicBoolean(true)
         var extensions: ExtensionSession? = null
+        var character: CharacterSession? = null
+        var characterLocalGeneration = -1L
     }
     private var active: Active? = null
 
@@ -45,7 +53,25 @@ class ConnectionRepository(
     fun activityResumed(value: Boolean, changingConfigurations: Boolean = false) {
         resumedActivity = value
         active?.extensions?.resumed(value, changingConfigurations)
+        active?.character?.resumed(value, changingConfigurations)
     }
+
+    fun attachCharacter(renderer: CharacterRenderer) {
+        characterRenderer = renderer
+        active?.character?.attach(renderer)
+    }
+    fun detachCharacter(renderer: CharacterRenderer) {
+        if (characterRenderer !== renderer) return
+        active?.character?.detach(renderer)
+        characterRenderer = null
+    }
+    fun characterEvent(renderer: CharacterRenderer, event: CharacterEvent) {
+        if (characterRenderer === renderer) active?.character?.event(renderer, event)
+    }
+    fun characterFailed(renderer: CharacterRenderer, code: String) {
+        if (characterRenderer === renderer) active?.character?.rendererFailed(renderer, code)
+    }
+    fun retryCharacter() { active?.character?.retry() }
 
     fun editDraft(text: String): Job = command { drafts.edit(text); publishDraft() }
     fun sendDraft(): Job = command {
@@ -181,7 +207,10 @@ class ConnectionRepository(
                     val endpoint = EndpointResolver(transport).resolve(credentials.serverId, profile.addresses)
                     val socket = transport.open(endpoint, credentials.serverId, credentials.token, pairing = false)
                     try {
-                        val requested = if (audioPlatform != null && transport.supportsAudio) listOf("audio_pcm_v1") else emptyList()
+                        val requested = buildList {
+                            if (audioPlatform != null && transport.supportsAudio) add("audio_pcm_v1")
+                            if (characterPlatform?.supported == true && transport.supportsCharacter) add("character_v1")
+                        }
                         val ready = withTimeout(5000) {
                             if (!socket.send(Hello(requested))) throw ConnectionException("connection_closed")
                             ProtocolCodec.decode(socket.receive()) as? Ready ?: throw ConnectionException("invalid_server_info")
@@ -193,13 +222,30 @@ class ConnectionRepository(
                         val session = ConversationSession(ready, nowMillis)
                         val record = Active(credentials, session, socket)
                         active = record
-                        val extensions = audioPlatform?.takeIf { transport.supportsAudio }?.let { platform ->
+                        val character = characterPlatform?.takeIf { "character_v1" in ready.capabilities }?.let { platform ->
+                            CharacterSession(ready, CharacterRepository.identity(credentials), CoroutineScope(currentCoroutineContext()), platform,
+                                mediaFactory = { context, current -> transport.character(credentials.token, context) { record.mediaCurrent.get() && current() } },
+                                send = socket::send, nowMillis = nowMillis,
+                                isPublicAssistant = { id -> mutableState.value.messages.any { it.id == id && it.role == "assistant" } },
+                                onState = { value -> if (active === record) {
+                                    if (record.characterLocalGeneration != value.viewGeneration) {
+                                        record.characterLocalGeneration = value.viewGeneration
+                                        characterViewGeneration++
+                                    }
+                                    mutableCharacterState.value = value.copy(viewGeneration = characterViewGeneration)
+                                } },
+                            ).also { record.character = it; it.resumed(resumedActivity); characterRenderer?.let(it::attach) }
+                        }
+                        if (character == null) mutableCharacterState.value = CharacterViewState("unsupported", viewGeneration = ++characterViewGeneration)
+                        val extensions = audioPlatform?.takeIf { "audio_pcm_v1" in ready.capabilities }?.let { platform ->
                             ExtensionSession(ready, CoroutineScope(currentCoroutineContext()),
                                 mediaFactory = { context -> transport.audio(credentials.token, context, record.mediaCurrent::get) },
                                 platform = platform, send = socket::send, nowMillis = nowMillis,
                                 isPublicAssistant = { id -> mutableState.value.messages.any { it.id == id && it.role == "assistant" } },
                                 onOutput = { output -> if (active === record) mutableState.value = mutableState.value.copy(audioOutput = output) },
                                 onFailure = { socket.cancel() },
+                                extraCapabilities = ready.capabilities.toSet() - "audio_pcm_v1",
+                                onPlayback = { character?.localPlayback(it) },
                             ).also { record.extensions = it; it.resumed(resumedActivity) }
                         }
                         var pendingSyncHeaders = 0
@@ -214,16 +260,20 @@ class ConnectionRepository(
                                 val deadline = current.responseDeadline ?: (nowMillis() + 10_000).also { current.responseDeadline = it }
                                 if (nowMillis() >= deadline) throw ConnectionException("request_status_timeout")
                             } else current.responseDeadline = null
-                        }, onExtension = { extensions?.receive(it) }, onBaseHeader = { header ->
+                        }, onExtension = { extensions?.receive(it); character?.receive(it) }, onBaseHeader = { header ->
                             when (header) {
                                 is ResyncRequired -> { headerEpoch = header.server_epoch; headerConversation = header.conversation_id; pendingSyncHeaders++ }
                                 is SnapshotBegin -> { headerEpoch = header.server_epoch; headerConversation = header.conversation_id; pendingSyncHeaders++ }
                                 else -> Unit
                             }
-                            if (pendingSyncHeaders > 0) extensions?.baseState(headerEpoch, headerConversation, false)
+                            if (pendingSyncHeaders > 0) {
+                                extensions?.baseState(headerEpoch, headerConversation, false)
+                                character?.baseState(headerEpoch, headerConversation, false)
+                            }
                         }, onClosed = {
                             record.mediaCurrent.set(false)
                             extensions?.shutdown()
+                            character?.shutdown()
                         }) { frame ->
                             if (frame is ErrorMessage) throw ConnectionException(frame.code)
                             val needsSync = withContext(decodeDispatcher) { session.consume(frame) }
@@ -240,15 +290,22 @@ class ConnectionRepository(
                                 }
                                 backoff.reset()
                             }
-                            if (pendingSyncHeaders > 0) extensions?.baseState(headerEpoch, headerConversation, false)
-                            else extensions?.baseState(session.serverEpoch, session.conversationId, !session.syncing)
+                            if (pendingSyncHeaders > 0) {
+                                extensions?.baseState(headerEpoch, headerConversation, false)
+                                character?.baseState(headerEpoch, headerConversation, false)
+                            } else {
+                                extensions?.baseState(session.serverEpoch, session.conversationId, !session.syncing)
+                                character?.baseState(session.serverEpoch, session.conversationId, !session.syncing)
+                            }
                             publishDraft()
                         }
                     } finally {
                         val closing = active
                         closing?.mediaCurrent?.set(false)
                         closing?.extensions?.shutdown()
+                        closing?.character?.shutdown()
                         closing?.extensions?.closeAndJoin()
+                        closing?.character?.closeAndJoin()
                         if (active === closing) active = null
                         socket.cancel()
                     }
@@ -279,6 +336,7 @@ class ConnectionRepository(
         generation++
         active?.mediaCurrent?.set(false)
         active?.extensions?.shutdown()
+        active?.character?.shutdown()
         connection?.cancelAndJoin()
         connection = null
     }
@@ -290,6 +348,7 @@ class ConnectionRepository(
     override fun close() {
         active?.mediaCurrent?.set(false)
         active?.extensions?.shutdown()
+        active?.character?.shutdown()
         scope.cancel()
     }
 
