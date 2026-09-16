@@ -4,6 +4,12 @@ import dev.ene.companion.protocol.*
 import kotlinx.serialization.json.*
 import java.util.UUID
 
+/** PC 장식 파라미터 창이 자동 표정/립싱크 충돌 방지를 위해 보호하는 항목이다. */
+fun isCharacterParameterEditable(id: String): Boolean = listOf(
+    "ParamEye", "ParamMouth", "ParamJaw", "ParamTongue", "ParamBrow", "ParamAngle",
+    "ParamBody", "ParamBreath", "ParamArm", "ParamHand", "ParamShoulder", "ParamLeg",
+).none(id::startsWith)
+
 /** Main 전용 편집 기준. 전송한 명령을 보관해 재전송하는 큐는 만들지 않는다. */
 class CharacterControls(private val commandId: () -> String = { UUID.randomUUID().toString() }) {
     var baseline: CharacterSnapshot? = null
@@ -34,6 +40,7 @@ class CharacterControls(private val commandId: () -> String = { UUID.randomUUID(
         require(parameters.size <= 256) { "invalid_parameters" }
         val catalog = current.catalog.associateBy { it.id }
         for ((key, value) in parameters) {
+            require(isCharacterParameterEditable(key)) { "read_only_parameter" }
             val bound = catalog[key] ?: throw CharacterException("invalid_parameters")
             if (value == JsonNull) continue
             val item = value as? JsonPrimitive ?: throw CharacterException("invalid_parameters")

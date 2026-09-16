@@ -91,4 +91,13 @@ class CharacterControlsTest {
         assertEquals("idle", controls.phase)
         assertNull(controls.baseline)
     }
+
+    @Test fun expressionAndLipParametersHaveSameReadOnlyPolicyAsPc() {
+        val raw = snapshot().json
+        val protected = buildJsonObject { put("id", "ParamMouthOpenY"); put("min", 0); put("max", 1); put("default", 0) }
+        val expanded = CharacterSnapshot.parse(JsonObject(raw + ("parameter_catalog" to JsonArray(raw.getValue("parameter_catalog").jsonArray + protected))).toString())
+        val controls = CharacterControls()
+        controls.begin(expanded)
+        assertThrows(IllegalArgumentException::class.java) { controls.submit(context, objectOf("{}"), objectOf("{\"ParamMouthOpenY\":1}")) }
+    }
 }

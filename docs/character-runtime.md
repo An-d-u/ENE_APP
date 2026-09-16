@@ -30,6 +30,12 @@
 
 휴대폰 출력은 AudioTrack이 소비한 PCM 위치와 음량을 사용하고 원격 echo는 적용하지 않는다. PC 출력은 PC 오디오 장치 위치를 최대 10Hz로 전달받는다. 시간을 추정해 앞당기지 않으며 750ms 갱신이 없으면 입을 닫는다. 이전 발화의 늦은 종료가 새 발화를 닫지 못하도록 식별자를 검사한다. 공개 대화 메시지에 속한 음성만 캐릭터와 연결한다.
 
+## 공통 설정의 편집 범위
+
+공통 설정 경계는 허용 키와 현재 모델 범위를 검증하고, 저장 결과를 받은 뒤 새 manifest로 확정한다. 전송 결과가 불명확하면 자동으로 다시 저장하지 않는다. PC의 기존 보호 정책과 맞춰 `ParamEye`, `ParamMouth`, `ParamJaw`, `ParamTongue`, `ParamBrow`, `ParamAngle`, `ParamBody`, `ParamBreath`, `ParamArm`, `ParamHand`, `ParamShoulder`, `ParamLeg`로 시작하는 값은 직접 수정하지 못한다. 장식값만 수정하며 눈깜빡임·움직임 강도는 별도 공통 설정으로 다룬다.
+
+D2 집중 검증은 `CharacterControlsTest` 8개와 `ExtensionCodecTest` 4개, 총 12개가 통과했다. 아직 모바일 설정 화면과 `character_controls_v1` 광고는 켜지 않았으며 D3/D4에 남아 있다. 아래 전체 빌드 결과는 C4 시점이다.
+
 ## 실행부 출처와 빌드 고정
 
 PC의 `tools/export_companion_character.py`가 명시 목록 20개와 해시·고지를 확인해 `app/src/main/assets/character`로 복사한다. 함께 보관한 `import-manifest.json`으로 독립 앱 checkout에서도 목록과 SHA-256을 검사한다. 앱 쪽 복사본을 직접 수정하지 않고 PC 원본 변경 후 내보낸다. 모델·일반 설정·대화 파일은 내보내지 않는다.
