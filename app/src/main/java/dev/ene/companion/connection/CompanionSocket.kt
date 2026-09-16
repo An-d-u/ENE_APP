@@ -149,7 +149,7 @@ private class OkHttpSocket(private val tls: TlsClient, private val onRelease: (O
 class OkHttpTransport(private val trust: TrustedServer) : ConnectionTransport, Closeable {
     private var binding: TlsClient? = null
     private var closed = false
-    private val sockets = ConcurrentHashMap.newKeySet<OkHttpSocket>()
+    private val sockets: MutableSet<OkHttpSocket> = ConcurrentHashMap.newKeySet()
     override val supportsAudio = true
     override val supportsCharacter = true
 
@@ -170,7 +170,7 @@ class OkHttpTransport(private val trust: TrustedServer) : ConnectionTransport, C
         trust.validate()
         val current = binding
         if (current != null && current.endpoint != endpoint) {
-            sockets.toList().forEach { it.cancel() }
+            sockets.forEach { it.cancel() }
             current.close()
             binding = null
         }
@@ -299,7 +299,8 @@ class OkHttpTransport(private val trust: TrustedServer) : ConnectionTransport, C
     @Synchronized override fun close() {
         if (closed) return
         closed = true
-        sockets.toList().forEach { it.cancel() }
+        // 종료 콜백의 제거와 경합하므로 size 기반 단일 항목 복사를 하지 않는다.
+        sockets.forEach { it.cancel() }
         binding?.close()
         binding = null
     }

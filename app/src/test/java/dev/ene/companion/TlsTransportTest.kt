@@ -18,6 +18,19 @@ class TlsTransportTest {
     private val id = TlsTestCertificates.SERVER_ID
     private fun credentials() = java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(ByteArray(32).also { java.security.SecureRandom().nextBytes(it) })
 
+    @Test fun socketRemovedBetweenSizeAndIterationCannotAbortTransportCleanup() {
+        val ca = TlsTestCertificates.ca()
+        val transport = OkHttpTransport(TrustedServer.parse(id, TlsTestCertificates.encoded(ca.certificate)))
+        // 만료 콜백이 size 확인 직후 마지막 항목을 지운 약한 일관성 집합을 재현한다.
+        val disappearing = object : AbstractMutableSet<Any>() {
+            override val size: Int get() = 1
+            override fun iterator(): MutableIterator<Any> = mutableListOf<Any>().iterator()
+            override fun add(element: Any) = error("시험 중 등록 없음")
+        }
+        transport.javaClass.getDeclaredField("sockets").apply { isAccessible = true }.set(transport, disappearing)
+        transport.close(); transport.close()
+    }
+
     @Test fun untrustedServerCannotReceiveTokenOrRevokeRegistration() = runBlocking {
         val ca = TlsTestCertificates.ca()
         val wrong = TlsTestCertificates.ca()
