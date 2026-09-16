@@ -4,7 +4,9 @@ import kotlin.math.min
 import kotlin.math.sqrt
 
 /** 쓰기 중에만 빌리는 구간이다. 소비자는 bytes를 변경하거나 별도 큐에 누적하지 않는다. */
-data class PcmSlice(val bytes: ByteArray, val offset: Int, val length: Int)
+data class PcmSlice(val bytes: ByteArray, val offset: Int, val length: Int) {
+    override fun toString(): String = "PcmSlice(length=$length)"
+}
 
 /** reservedBytes에는 native buffer와 HTTP 읽기용 임시 공간을 함께 포함한다. */
 class PcmBuffer(val sampleRate: Int, val channels: Int, reservedBytes: Int = 0) {
@@ -22,16 +24,16 @@ class PcmBuffer(val sampleRate: Int, val channels: Int, reservedBytes: Int = 0) 
         private set
     private var closed = false
 
-    @Synchronized fun offer(bytes: ByteArray): String {
+    @Synchronized fun offer(bytes: ByteArray, start: Int = 0, length: Int = bytes.size - start): String {
         if (closed || sourceEnded) return "closed"
-        if (bytes.isEmpty() || bytes.size > 32768 || bytes.size % frameBytes != 0 ||
-            (receivedFrames + bytes.size / frameBytes) * frameBytes >
+        if (start < 0 || length !in 1..32768 || start > bytes.size - length || length % frameBytes != 0 ||
+            (receivedFrames + length / frameBytes) * frameBytes >
                 min(sampleRate * frameBytes * 180L, 36L * 1024 * 1024)
         ) return "invalid"
-        if (retainedBytes + bytes.size > capacityBytes || chunks.size >= 256) return "full"
-        chunks.addLast(bytes.copyOf())
-        retainedBytes += bytes.size
-        receivedFrames += bytes.size / frameBytes
+        if (retainedBytes + length > capacityBytes || chunks.size >= 256) return "full"
+        chunks.addLast(bytes.copyOfRange(start, start + length))
+        retainedBytes += length
+        receivedFrames += length / frameBytes
         return "accepted"
     }
 

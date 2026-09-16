@@ -7,6 +7,17 @@ import org.junit.Test
 
 /** 음성은 모두 메모리에서 생성한 일정한 샘플이다. */
 class PcmBufferTest {
+    @Test fun scratchSubrangeIsCopiedOnceAndStringDoesNotExposeSamples() {
+        val raw = ByteArray(24) { 37 }
+        val buffer = PcmBuffer(8000, 1)
+        assertEquals("accepted", buffer.offer(raw, 4, 8))
+        raw.fill(0)
+        val view = buffer.peek()!!
+        assertArrayEquals(ByteArray(8) { 37 }, view.bytes)
+        assertEquals("PcmSlice(length=8)", view.toString())
+        assertEquals("invalid", buffer.offer(raw, -1, 8))
+        assertEquals("invalid", buffer.offer(raw, 20, 8))
+    }
     private fun pcm(frames: Int, channels: Int, value: Int): ByteArray =
         ByteArray(frames * channels * 2) { if (it % 2 == 0) value.toByte() else (value shr 8).toByte() }
 
