@@ -48,12 +48,19 @@ object ProtocolCodec {
     fun decode(raw: String): WireMessage = safe {
         checkedString(raw, MAX_WIRE_BYTES, limitCode = "message_too_large")
         checkDepth(raw)
-        json.decodeFromJsonElement<WireMessage>(normalize(obj(json.parseToJsonElement(raw))))
+        val normalized = normalize(obj(json.parseToJsonElement(raw)))
+        checkedString(raw, ExtensionCodec.wireLimit(text(normalized["type"])), limitCode = "message_too_large")
+        json.decodeFromJsonElement<WireMessage>(normalized)
     }
 
     fun encode(message: WireMessage): String = safe {
-        val normalized = normalize(obj(json.parseToJsonElement(json.encodeToString<WireMessage>(message))))
-        checkedString(normalized.toString(), MAX_WIRE_BYTES, limitCode = "message_too_large")
+        var body = obj(json.parseToJsonElement(json.encodeToString<WireMessage>(message)))
+        // 모델 없음의 null은 필수 필드다. 기존 선택적 null 생략 정책은 유지한다.
+        if (message is CharacterChanged && message.model_version == null) {
+            body = JsonObject(body + ("model_version" to kotlinx.serialization.json.JsonNull))
+        }
+        val normalized = normalize(body)
+        checkedString(normalized.toString(), ExtensionCodec.wireLimit(text(normalized["type"])), limitCode = "message_too_large")
     }
 
     /** QR·서버 정보에도 동일한 UTF-8·깊이·객체 검사를 적용한다. */
@@ -192,6 +199,7 @@ object ProtocolCodec {
     private fun normalize(body: JsonObject): JsonObject {
         if (integer(body["protocol_version"]) != 1L) throw ProtocolException("unsupported_version")
         val kind = text(body["type"])
+        if (kind in ExtensionCodec.types) return ExtensionCodec.normalize(kind, body)
         return buildJsonObject {
             put("type", kind)
             put("protocol_version", 1)
