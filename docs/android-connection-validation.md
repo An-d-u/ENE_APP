@@ -2,6 +2,8 @@
 
 검증일: 2026-09-16. 기본 계획 Task 5의 구현 기록이다. 실제 휴대폰 LAN 시험과 실제 ENE 통합 완료 기록이 아니다.
 
+2026-09-17 갱신: 이 문서의 시험 수·APK 해시는 **Task 5 당시 기록**이다. 이후 실제 ENE 연결과 캐릭터·음성·공통 설정을 구현했다. 최신 소스 커밋·자동 검증·APK 해시·미검증 경계는 [캐릭터·음성 지원 기록](media-support.md)을 따른다.
+
 ## 구현 범위
 
 - `EneApplication`이 연결 Repository 하나를 소유한다. ProcessLifecycleOwner의 전경/배경 전환으로 연결을 열고 회수한다. 화면은 저장소를 새로 만들지 않는다. 회전과 실제 배경 전환의 차이는 [Android 공식 수명 문서](https://developer.android.com/reference/androidx/lifecycle/ProcessLifecycleOwner)를 따르며 실제 단말 동작은 아래 미검증 항목이다.
@@ -14,7 +16,7 @@
 - CameraX Preview/ImageAnalysis와 번들 ML Kit QR 인식기를 사용한다. 권한은 명시적 버튼으로 요청하고, 유효한 첫 QR 후 분석기를 멈춘다. 실패·취소·정상 처리에서 ImageProxy를 회수한다. [CameraX 분석 수명](https://developer.android.com/media/camera/camerax/analyze), [ML Kit QR 인식 지침](https://developers.google.com/ml-kit/vision/barcode-scanning/android).
 - 최소 화면에 연결 상태, TLS/QR 오류 안내, 주소 수정, 등록 해제 확인, 전체 대화 목록, 입력·전송을 연결했다. 48dp 이상 터치 영역과 텍스트 상태 설명을 사용한다. UI 상태에 대화 복원을 넣지 않으며 FLAG_SECURE로 최근 앱 캡처 노출을 제한한다.
 
-## 자동 검증
+## 당시 자동 검증
 
 | 항목 | 결과 |
 | --- | --- |
@@ -34,7 +36,7 @@
 .\gradlew.bat :app:testDebugUnitTest :app:lintDebug :app:assembleDebug :app:assembleDebugAndroidTest --offline --dependency-verification strict --console=plain
 ```
 
-개발 APK: `app/build/outputs/apk/debug/app-debug.apk`, 약 36.9 MiB. 출시 서명물이 아니다. 확인한 SHA-256:
+당시 개발 APK: `app/build/outputs/apk/debug/app-debug.apk`, 약 36.9 MiB. 출시 서명물이 아니다. 아래 해시는 현재 APK의 해시가 아닌 과거 검증 기록이다.
 
 `3C9862D5799FE0EC078CF2BE2CE7BA6BA2D4DE9E554FAB1C4753C865323B56A5`
 
@@ -42,7 +44,7 @@
 
 - 실제 Android 카메라/OS 권한 거절 및 설정 복구, QR 인식 거리·속도, UI 배치·큰 글꼴·키보드·회전, 실제 프로세스 종료 후 비복원.
 - 실제 Android Keystore 동작과 백업/기기 전송 제외, APK 설치, PC와 휴대폰의 같은 LAN 왕복·무응답 단절·재접속.
-- PC 실제 ENE 대화·AI 접수·트레이/종료 연동. 현재 상대편 조기 시험은 합성 응답 전용 smoke 도구다.
-- 출시 아이콘·서명·배포, GitHub 게시, LTE/5G·Tailscale, TTS·Live2D.
+- 실제 단말에서 PC ENE 대화·AI 접수·트레이/종료·TTS·Live2D 연동. 소스 구현과 Qt/TLS·합성 제공자 시험은 후속 미디어 단계에서 완료했지만 실제 기기 인수는 별도다.
+- 출시 아이콘·서명·배포, GitHub 게시, LTE/5G·Tailscale.
 
 단위 시험은 카메라와 휴대폰 시험을 대체하지 않는다. 단말 선택과 설치 동의를 받은 뒤 [설치·LAN 확인 절차](build-and-install.md)를 진행한다. 방화벽 변경과 외부 API 호출도 별도 확인 없이 수행하지 않는다.
