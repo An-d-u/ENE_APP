@@ -109,6 +109,7 @@ class ConnectionRepository(
         stopConnection()
         drafts = DraftOutbox()
         mutableState.value = ConnectionViewState(phase = ConnectionPhase.ACTION_REQUIRED)
+        clearCharacterCache()
         withContext(ioDispatcher) { registrations.clear(); profiles.clear() }
         mutableState.value = ConnectionViewState()
     }
@@ -173,6 +174,7 @@ class ConnectionRepository(
                                 is PairApproved -> {
                                     if (frame.pairing_id != qr.pairingId || frame.server_id != qr.serverId) throw ConnectionException("invalid_pairing_response")
                                     val credentials = DeviceCredentials.create(frame.server_id, frame.device_id, frame.registration_generation, frame.token, qr.trust.caCertificate, wallClock)
+                                    clearCharacterCache()
                                     // 주소와 토큰 보관이 끝날 때까지 다음 전환은 취소된 작업을 실제로 회수한다.
                                     withContext(ioDispatcher) {
                                         profiles.save(ConnectionProfile(qr.serverId, listOf(endpoint) + qr.addresses.filter { it != endpoint }))
@@ -326,7 +328,10 @@ class ConnectionRepository(
                 if (code == "authorization_revoked") {
                     drafts = DraftOutbox()
                     mutableState.value = ConnectionViewState(errorCode = code)
-                    try { withContext(ioDispatcher) { registrations.clear() } }
+                    try {
+                        clearCharacterCache()
+                        withContext(ioDispatcher) { registrations.clear(); profiles.clear() }
+                    }
                     catch (cancel: CancellationException) { throw cancel }
                     catch (failure: Exception) { show(ConnectionPhase.ACTION_REQUIRED, failureCode(failure)) }
                     return
@@ -337,6 +342,12 @@ class ConnectionRepository(
             retry = true
             delay(backoff.nextMillis())
         }
+    }
+
+    private suspend fun clearCharacterCache() {
+        try { characterPlatform?.clearCache() }
+        catch (cancel: CancellationException) { throw cancel }
+        catch (_: Exception) { throw ConnectionException("character_cache_cleanup_failed") }
     }
 
     private suspend fun stopConnection() {

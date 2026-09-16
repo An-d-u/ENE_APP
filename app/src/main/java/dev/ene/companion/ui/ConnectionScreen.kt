@@ -113,6 +113,7 @@ fun ConnectionStatus(state: ConnectionViewState) {
 }
 
 internal fun errorDescription(code: String): String = when (code) {
+    "character_cache_cleanup_failed" -> "기존 캐릭터 파일을 지우지 못해 등록 변경을 중단했습니다. 앱을 다시 연 뒤 재시도해 주세요."
     "tls_expired", "tls_repair_required", "registration_lost", "registration_changed", "authorization_revoked" -> "등록을 확인할 수 없습니다. PC에서 새 QR을 발급해 다시 승인해 주세요."
     "tls_clock_invalid" -> "휴대폰과 PC의 날짜·시간을 확인해 주세요."
     "tls_identity_invalid", "server_mismatch" -> "등록한 PC의 인증서와 일치하지 않아 연결을 차단했습니다. 주소 또는 PC의 새 QR을 확인해 주세요."

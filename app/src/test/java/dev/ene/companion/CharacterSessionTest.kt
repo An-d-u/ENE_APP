@@ -36,6 +36,30 @@ class CharacterSessionTest {
         override fun show(snapshot: CharacterSnapshot, character: CharacterCache.CachedCharacter?) { snapshots += snapshot }
         override fun post(type: String, value: JsonObject) { commands += type to value }
     }
+
+    @Test fun shutdownReleasesRendererOwnedMountAndStreamsBeforeCacheCleanup() = runTest {
+        val cache = CharacterCache(temporary.newFolder())
+        val model = snapshot()
+        val load = cache.begin("1".repeat(64), model).use { ticket ->
+            ticket.open(model.entryAssetId!!).use { it.write(payload) }
+            CharacterLoad(model, ticket.commit())
+        }
+        var retained: CharacterCache.CachedCharacter? = null
+        var stream: java.io.InputStream? = null
+        var clears = 0
+        val renderer = object : Renderer() {
+            override fun show(snapshot: CharacterSnapshot, character: CharacterCache.CachedCharacter?) {
+                retained = character?.retain(); stream = retained?.open(model.entryAssetId!!)
+            }
+            override fun clear() { stream?.close(); retained?.close(); clears++ }
+        }
+        val f = Fixture(this) { load }
+        f.activate(); f.session.attach(renderer); advanceTimeBy(300); runCurrent()
+        assertNotNull(retained)
+        f.session.closeAndJoin(); f.session.shutdown()
+        assertEquals(1, clears)
+        cache.clear(); assertEquals(0, cache.versionCount)
+    }
     private inner class Fixture(test: TestScope, controls: Boolean = false, loader: suspend () -> CharacterLoad) {
         private val sessionReady = if (controls) ready.copy(capabilities = ready.capabilities + "character_controls_v1") else ready
         val states = mutableListOf<CharacterViewState>()

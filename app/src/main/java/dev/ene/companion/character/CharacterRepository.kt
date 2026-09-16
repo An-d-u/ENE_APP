@@ -19,6 +19,8 @@ class CharacterLoad(val snapshot: CharacterSnapshot, val character: CharacterCac
 
 /** 최신 연결·모델 세대의 manifest 없이는 이전 캐시를 화면에 돌려주지 않는다. */
 class CharacterRepository(private val cache: CharacterCache) {
+    suspend fun clear() = withContext(Dispatchers.IO) { cache.clear() }
+
     companion object {
         /** Application이 하나만 생성해 공유한다. 인증서/서버 ID도 디스크에는 해시 이름으로만 남긴다. */
         suspend fun create(context: Context): CharacterRepository = withContext(Dispatchers.IO) {

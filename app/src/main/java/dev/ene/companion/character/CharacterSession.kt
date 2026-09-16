@@ -279,6 +279,7 @@ class CharacterSession(
         headPat?.cancel()
         closed = true; pending = false; token?.set(false); closeMedia()
         download?.cancel(); worker?.cancel(); timer.cancel()
+        runCatching { renderer?.clear() }
         currentLoad?.close(); currentLoad = null; renderer = null
         sequence.detached(); playback.reset(); publish("unavailable")
     }

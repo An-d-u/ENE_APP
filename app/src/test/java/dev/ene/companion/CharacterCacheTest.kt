@@ -7,6 +7,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import java.io.File
+import kotlinx.serialization.json.*
 
 class CharacterCacheTest {
     @get:Rule val temporary = TemporaryFolder()
@@ -15,6 +16,64 @@ class CharacterCacheTest {
     private fun store(cache: CharacterCache, bytes: ByteArray) = cache.begin(identity, snapshot(bytes)).use { ticket ->
         ticket.open(snapshot(bytes).assets.single().id).use { it.write(bytes) }
         ticket.commit()
+    }
+
+    @Test fun diskDescriptorDoesNotPersistCurrentCharacterStateAndClearWaitsForPins() {
+        val root = temporary.newFolder("privacy-cache")
+        val cache = CharacterCache(root)
+        val bytes = "{\"synthetic\":7}".toByteArray()
+        val mount = store(cache, bytes)
+        val descriptor = Json.parseToJsonElement(File(root, "$identity/${snapshot(bytes).modelVersion}/manifest.json").readText()).jsonObject
+        assertTrue(descriptor.getValue("settings").jsonObject.isEmpty())
+        assertTrue(descriptor.getValue("parameters").jsonObject.isEmpty())
+        assertEquals(0L, descriptor.getValue("action_seq").jsonPrimitive.long)
+        assertEquals(1L, descriptor.getValue("state_revision").jsonPrimitive.long)
+        assertEquals(1L, descriptor.getValue("settings_revision").jsonPrimitive.long)
+        assertEquals("normal", descriptor.getValue("default_expression").jsonPrimitive.content)
+        assertThrows(IllegalArgumentException::class.java) { cache.clear() }
+        assertEquals(1, cache.versionCount)
+        mount.close(); cache.clear(); cache.clear()
+        assertEquals(0, cache.versionCount); assertEquals(0L, cache.usedBytes)
+        assertTrue(root.listFiles()!!.isEmpty())
+    }
+
+    @Test fun oldStateBearingCacheIsDiscardedInsteadOfRestoredAfterUpgrade() {
+        val root = temporary.newFolder("old-cache")
+        val bytes = "{\"synthetic\":8}".toByteArray()
+        val cache = CharacterCache(root)
+        store(cache, bytes).close()
+        File(root, "$identity/${snapshot(bytes).modelVersion}/manifest.json").writeText(snapshot(bytes).json.toString())
+        val fresh = CharacterCache(root)
+        assertEquals(0, fresh.versionCount)
+        assertNull(fresh.acquire(identity, snapshot(bytes)))
+    }
+
+    @Test fun reopeningStaticCacheUsesFreshServerStateAndCleanupPreservesUnknownFiles() {
+        val root = temporary.newFolder("static-cache")
+        val bytes = "{\"synthetic\":9}".toByteArray()
+        val original = snapshot(bytes)
+        store(CharacterCache(root), bytes).close()
+        val cache = CharacterCache(root)
+        assertEquals(1, cache.versionCount)
+        val fresh = CharacterSnapshot.parse(CharacterFixtures.manifest(bytes, revision = 9))
+        cache.acquire(identity, fresh)!!.use { mount ->
+            assertEquals(9L, mount.snapshot.stateRevision)
+            assertEquals(original.parameters, mount.snapshot.parameters)
+        }
+        val unknown = File(root, "unrelated.txt").apply { writeText("synthetic") }
+        val bucketUnknown = File(root, "$identity/unrelated.txt").apply { writeText("synthetic") }
+        cache.clear()
+        assertEquals(0, cache.versionCount)
+        assertEquals("synthetic", unknown.readText()); assertEquals("synthetic", bucketUnknown.readText())
+    }
+
+    @Test fun cleanupRefusesAnActiveDownloadAndSucceedsAfterItsOwnerCloses() {
+        val cache = CharacterCache(temporary.newFolder("downloading-cache"))
+        val ticket = cache.begin(identity, snapshot("{}".toByteArray()))
+        assertThrows(IllegalArgumentException::class.java) { cache.clear() }
+        assertEquals(1, cache.versionCount)
+        ticket.close(); cache.clear()
+        assertEquals(0, cache.versionCount)
     }
 
     @Test fun onlyVerifiedCompleteBundleBecomesVisible() {

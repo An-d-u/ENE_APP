@@ -3,6 +3,7 @@ package dev.ene.companion
 import dev.ene.companion.connection.*
 import dev.ene.companion.protocol.*
 import dev.ene.companion.storage.*
+import dev.ene.companion.character.CharacterPlatform
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.test.*
@@ -72,10 +73,76 @@ class ConnectionRepositoryTest {
         override fun close() { closed = true; socket.cancel() }
     }
 
-    private fun TestScope.repository(registrations: Registrations, profiles: Profiles = Profiles(), factory: () -> Transport): ConnectionRepository {
+    private fun TestScope.repository(registrations: Registrations, profiles: Profiles = Profiles(), character: CharacterPlatform? = null, factory: () -> Transport): ConnectionRepository {
         val dispatcher = StandardTestDispatcher(testScheduler)
         return ConnectionRepository(registrations, profiles, transportFactory = { factory() }, dispatcher = dispatcher,
-            ioDispatcher = dispatcher, decodeDispatcher = dispatcher, nowMillis = { testScheduler.currentTime }, jitter = { 0.0 })
+            ioDispatcher = dispatcher, decodeDispatcher = dispatcher, nowMillis = { testScheduler.currentTime }, jitter = { 0.0 }, characterPlatform = character)
+    }
+
+    @Test fun forgetClearsCacheBeforeCredentialsAndPreservesRegistrationOnCleanupFailure() = runTest {
+        val registrations = Registrations(credentials())
+        val profiles = Profiles()
+        var cleared = 0
+        var fail = true
+        val platform = CharacterPlatform(false, clearCache = {
+            assertNotNull(registrations.value); assertNotNull(profiles.value)
+            if (fail) error("합성 캐시 삭제 실패")
+            cleared++
+        }) { _, _, _ -> error("모델 로드 없음") }
+        val repo = repository(registrations, profiles, platform) { error("네트워크 없음") }
+        try {
+            repo.forget(); runCurrent()
+            assertEquals("character_cache_cleanup_failed", repo.state.value.errorCode)
+            assertNotNull(registrations.value); assertEquals(0, registrations.clears)
+            fail = false; repo.forget(); runCurrent()
+            assertEquals(1, cleared); assertNull(registrations.value); assertNull(profiles.value)
+            assertEquals(ConnectionPhase.UNREGISTERED, repo.state.value.phase)
+        } finally { repo.close(); runCurrent() }
+    }
+
+    @Test fun approvedReplacementClearsCacheOnlyAfterApprovalAndBeforeNewCredentials() = runTest {
+        val previous = credentials()
+        val registrations = Registrations(previous)
+        val transports = mutableListOf<Transport>()
+        var clears = 0
+        var fail = true
+        val platform = CharacterPlatform(false, clearCache = {
+            assertEquals(previous, registrations.value)
+            assertTrue(transports.first().closed)
+            if (fail) error("합성 캐시 삭제 실패")
+            clears++
+        }) { _, _, _ -> error("모델 로드 없음") }
+        val repo = repository(registrations, character = platform) { Transport().also(transports::add) }
+        try {
+            repo.foreground(true); runCurrent()
+            repeat(2) { attempt ->
+                repo.pair(qr()); runCurrent()
+                val pairing = transports.last()
+                assertEquals(0, clears)
+                val approved = credentials()
+                pairing.socket.offer(PairApproved(pairingId, serverId, approved.deviceId, 1, approved.token)); runCurrent()
+                if (attempt == 0) {
+                    assertEquals("character_cache_cleanup_failed", repo.state.value.errorCode)
+                    assertEquals(previous, registrations.value); assertEquals(0, registrations.saves)
+                    fail = false
+                } else {
+                    assertEquals(1, clears); assertEquals(approved, registrations.value)
+                }
+            }
+        } finally { repo.close(); runCurrent() }
+    }
+
+    @Test fun confirmedRevocationClearsCacheBeforeForgettingCredentials() = runTest {
+        val registrations = Registrations(credentials())
+        var cleared = false
+        val platform = CharacterPlatform(false, clearCache = { assertNotNull(registrations.value); cleared = true }) {
+            _, _, _ -> error("모델 로드 없음")
+        }
+        val repo = repository(registrations, character = platform) { Transport().apply { failure = "authorization_revoked" } }
+        try {
+            repo.foreground(true); runCurrent()
+            assertTrue(cleared); assertNull(registrations.value)
+        } finally { repo.close(); runCurrent() }
     }
 
     @Test fun noRegistrationDoesNotOpenNetwork() = runTest {

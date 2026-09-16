@@ -145,6 +145,16 @@ class CharacterWebView(
         try { send(bridge.command(type, value)) } catch (_: IllegalArgumentException) { fail("character_render_failed") }
     }
 
+    override fun clear() {
+        // 새 연결을 기다리는 뷰는 재사용하되 이전 모델 파일/스트림은 동기적으로 해제한다.
+        show(CharacterSnapshot.parse("""{
+            "status":"unavailable","model_version":null,"model_id":null,"entry_asset_id":null,
+            "runtime_version":1,"state_revision":1,"settings_revision":1,"action_seq":0,
+            "settings":{},"parameters":{},"head_pat_defaults":{},"parameter_catalog":[],
+            "expression_ids":[],"gesture_ids":[],"default_expression":"normal","assets":[]
+        }"""), null)
+    }
+
     private fun send(raw: String) {
         val web = browser ?: return
         if (!closed && WebViewFeature.isFeatureSupported(WebViewFeature.POST_WEB_MESSAGE)) {

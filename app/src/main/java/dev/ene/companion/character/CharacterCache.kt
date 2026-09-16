@@ -11,6 +11,7 @@ import java.nio.file.*
 import java.nio.file.attribute.BasicFileAttributes
 import java.security.MessageDigest
 import java.util.UUID
+import kotlinx.serialization.json.*
 
 /** 앱 전용 noBackupFilesDir에서만 사용한다. 모든 디스크 작업은 IO 실행 문맥에서 호출한다. */
 class CharacterCache(
@@ -32,6 +33,21 @@ class CharacterCache(
     val versionCount: Int @Synchronized get() = entries.size + tickets.size
     val usedBytes: Long @Synchronized get() = entries.values.sumOf { it.bytes } + tickets.sumOf { it.reserved }
 
+    @Synchronized fun clear() {
+        require(tickets.isEmpty() && entries.values.none { it.pins > 0 }) { "cache_busy" }
+        safeDirectory(root)
+        entries.toList().forEach { (key, entry) ->
+            removeOwned(entry.path)
+            entries.remove(key)
+        }
+        children(root).filter { digestPattern.matches(it.fileName.toString()) && directory(it) }.forEach { bucket ->
+            // 중단된 다운로드도 정리하되, 캐시 소유 이름이 아닌 파일과 링크는 건드리지 않는다.
+            children(bucket).filter { digestPattern.matches(it.fileName.toString()) || stagingPattern.matches(it.fileName.toString()) }
+                .forEach(::removeOwned)
+            if (children(bucket).isEmpty()) Files.delete(bucket)
+        }
+    }
+
     init {
         require(maxBytes > 0) { "invalid_cache_budget" }
         Files.createDirectories(this.root)
@@ -43,7 +59,7 @@ class CharacterCache(
                 if (stagingPattern.matches(name)) removeOwned(version)
                 else if (digestPattern.matches(name) && directory(version)) {
                     val snapshot = runCatching { readManifest(version) }.getOrNull()
-                    if (snapshot == null || snapshot.modelVersion != name) removeOwned(version)
+                    if (snapshot == null || snapshot.modelVersion != name || snapshot.json != staticDescriptor(snapshot)) removeOwned(version)
                     else {
                         val entry = Entry(version, snapshot, reservation(snapshot), ++clock)
                         if (verified(entry)) entries[key(bucket.fileName.toString(), name)] = entry else removeOwned(version)
@@ -93,6 +109,17 @@ class CharacterCache(
         safeDirectory(root)
     }
     private fun key(identity: String, version: String) = "$identity/$version"
+    private fun staticDescriptor(snapshot: CharacterSnapshot): JsonObject {
+        val expressions = snapshot.json.getValue("expression_ids").jsonArray
+        val base = expressions.firstOrNull { it.jsonPrimitive.content == "normal" } ?: expressions.first()
+        // 재접속 시 최신 상태를 서버에서 받는다. 디스크에는 모델 검증용 정보만 남긴다.
+        return JsonObject(snapshot.json.toMutableMap().apply {
+            put("settings", JsonObject(emptyMap())); put("parameters", JsonObject(emptyMap()))
+            put("state_revision", JsonPrimitive(1)); put("settings_revision", JsonPrimitive(1)); put("action_seq", JsonPrimitive(0))
+            put("default_expression", base)
+            put("head_pat_defaults", buildJsonObject { put("active", base); put("end", base) })
+        })
+    }
     private fun reservation(snapshot: CharacterSnapshot) = snapshot.totalBytes + snapshot.json.toString().toByteArray(Charsets.UTF_8).size
     private fun directory(path: Path) = Files.isDirectory(path, LinkOption.NOFOLLOW_LINKS) && !Files.isSymbolicLink(path)
     private fun safeDirectory(path: Path) { require(directory(path)) { "unsafe_cache_path" } }
@@ -219,7 +246,7 @@ class CharacterCache(
 
         fun commit(): CachedCharacter = synchronized(this@CharacterCache) {
             check(!closed && writers.isEmpty() && complete.size == snapshot.assets.size) { "incomplete_download" }
-            val manifest = snapshot.json.toString().toByteArray(Charsets.UTF_8)
+            val manifest = staticDescriptor(snapshot).toString().toByteArray(Charsets.UTF_8)
             FileChannel.open(stage.resolve("manifest.json"), StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE, LinkOption.NOFOLLOW_LINKS).use {
                 val buffer = ByteBuffer.wrap(manifest)
                 while (buffer.hasRemaining()) it.write(buffer)
