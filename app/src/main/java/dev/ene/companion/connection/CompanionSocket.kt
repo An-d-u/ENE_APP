@@ -156,7 +156,7 @@ class OkHttpTransport(private val trust: TrustedServer) : ConnectionTransport, C
     }
 
     companion object {
-        private fun transportFailure(error: Throwable): String {
+        internal fun transportFailure(error: Throwable): String {
             var current: Throwable? = error
             repeat(8) {
                 val cause = current ?: return@repeat
