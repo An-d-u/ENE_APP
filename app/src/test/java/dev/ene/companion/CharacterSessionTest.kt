@@ -37,12 +37,13 @@ class CharacterSessionTest {
         override fun show(snapshot: CharacterSnapshot, character: CharacterCache.CachedCharacter?) { snapshots += snapshot }
         override fun post(type: String, value: JsonObject) { commands += type to value }
     }
-    private inner class Fixture(test: TestScope, loader: suspend () -> CharacterLoad) {
+    private inner class Fixture(test: TestScope, controls: Boolean = false, loader: suspend () -> CharacterLoad) {
+        private val sessionReady = if (controls) ready.copy(capabilities = ready.capabilities + "character_controls_v1") else ready
         val states = mutableListOf<CharacterViewState>()
         val media = mutableListOf<Media>()
         val sent = mutableListOf<WireMessage>()
         val renderer = Renderer()
-        val session = CharacterSession(ready, "1".repeat(64), test.backgroundScope,
+        val session = CharacterSession(sessionReady, "1".repeat(64), test.backgroundScope,
             CharacterPlatform(true) { _, _, _ -> loader() },
             mediaFactory = { _, _ -> Media().also(media::add) }, send = { sent += it; true },
             nowMillis = { test.testScheduler.currentTime }, isPublicAssistant = { it == audioId(4) }, onState = states::add)
@@ -50,7 +51,7 @@ class CharacterSessionTest {
             session.attach(renderer)
             session.resumed(true)
             session.baseState(audioId(1), audioId(3), true)
-            session.receive(ExtensionsReady(1, audioId(1), audioId(2), ready.capabilities))
+            session.receive(ExtensionsReady(1, audioId(1), audioId(2), sessionReady.capabilities))
         }
         fun rendered() = session.event(renderer, CharacterEvent("ready", snapshot().modelVersion))
         fun action(number: Long) = CharacterAction(1, audioId(1), audioId(2), snapshot().modelVersion!!, number, "gesture", "nod", 0)
@@ -155,6 +156,37 @@ class CharacterSessionTest {
         f.session.attach(broken)
         f.session.event(broken, CharacterEvent("ready", snapshot().modelVersion))
         assertEquals("error", f.states.last().status)
+        assertTrue(f.sent.isEmpty())
+        f.session.closeAndJoin()
+    }
+
+    @Test fun patInputRequiresNegotiationReadyRendererAndCancelsOnRotation() = runTest {
+        val f = Fixture(this, controls = true) { result() }
+        val input = HeadPatInput(snapshot().modelVersion!!, audioId(60), 0, "start", .5)
+        f.activate(); advanceTimeBy(200); runCurrent()
+        f.session.event(f.renderer, CharacterEvent("head_pat_input", input = input))
+        assertTrue(f.sent.none { it is HeadPat })
+        f.rendered()
+        f.session.event(f.renderer, CharacterEvent("head_pat_input", input = input))
+        assertEquals("start", (f.sent.single() as HeadPat).phase)
+        f.session.resumed(false, changingConfigurations = true)
+        assertEquals(listOf("start", "cancel"), f.sent.filterIsInstance<HeadPat>().map { it.phase })
+        f.session.closeAndJoin()
+        assertEquals(2, f.sent.size)
+    }
+
+    @Test fun unnegotiatedOrStaleRendererCannotSendPatAndRemoteEchoIsNotInput() = runTest {
+        val plain = Fixture(this) { result() }
+        plain.activate(); advanceTimeBy(200); runCurrent(); plain.rendered()
+        val input = HeadPatInput(snapshot().modelVersion!!, audioId(61), 0, "start", .5)
+        plain.session.event(plain.renderer, CharacterEvent("head_pat_input", input = input))
+        assertTrue(plain.sent.isEmpty())
+        plain.session.closeAndJoin()
+        val f = Fixture(this, controls = true) { result() }
+        f.activate(); advanceTimeBy(200); runCurrent(); f.rendered()
+        f.session.event(Renderer(), CharacterEvent("head_pat_input", input = input))
+        f.session.receive(HeadPatState(1, audioId(1), audioId(2), snapshot().modelVersion!!, audioId(62), 1, 0, "accepted", .4, "pc", "accepted"))
+        assertTrue(f.renderer.commands.any { it.first == "head_pat" })
         assertTrue(f.sent.isEmpty())
         f.session.closeAndJoin()
     }

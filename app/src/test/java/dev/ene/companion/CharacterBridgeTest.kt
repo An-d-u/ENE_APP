@@ -52,6 +52,19 @@ class CharacterBridgeTest {
         assertNull(policy.resolve("$origin/character/index.html", "GET", false))
     }
 
+    @Test fun patInputRequiresCurrentModelAndTypedBoundedFields() {
+        val bridge = CharacterBridge(generation)
+        bridge.expectModel(model)
+        bridge.receive(origin, true, message("document_ready"))
+        val input = message("head_pat_input", ",\"model_generation\":\"$model\",\"interaction_id\":\"$generation\",\"seq\":0,\"phase\":\"start\",\"intensity\":0.5")
+        assertEquals("start", bridge.receive(origin, true, input)?.input?.phase)
+        assertNull(bridge.receive(origin, true, input.replace("0.5", "\"0.5\"")))
+        assertNull(bridge.receive(origin, true, input.replace("0.5", "2.0")))
+        assertNull(bridge.receive(origin, true, input.replace(model, "b".repeat(64))))
+        assertNull(bridge.receive(origin, true, input.replace("\"seq\":0", "\"seq\":true")))
+        assertNull(bridge.receive(origin, true, input.replace("\"start\"", "\"increment\"")))
+    }
+
     @Test fun manifestLimitLeavesRoomForNativeEnvelope() {
         val bridge = CharacterBridge(generation)
         bridge.receive(origin, true, message("document_ready"))

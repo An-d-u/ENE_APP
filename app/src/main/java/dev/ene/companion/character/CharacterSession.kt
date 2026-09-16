@@ -38,7 +38,8 @@ class CharacterSession(
     private var missedExpression = 0L
     private var lastMouth: CharacterMouth? = null
     private var state = CharacterViewState()
-    private val timer = scope.launch { while (isActive) { delay(50); publishMouth() } }
+    private var headPat: HeadPatSession? = null
+    private val timer = scope.launch { while (isActive) { delay(50); publishMouth(); headPat?.tick() } }
 
     private fun available() = !closed && !failed && context != null && activeScreen && synced &&
         platform.supported && "character_v1" in capabilities
@@ -47,6 +48,7 @@ class CharacterSession(
         if (closed) return
         activeScreen = value
         if (!value) {
+            headPat?.cancel()
             sequence.detached()
             if (!changingConfigurations) {
                 token?.set(false); closeMedia(); download?.cancel(); pending = false
@@ -60,13 +62,14 @@ class CharacterSession(
     fun baseState(epoch: String, conversation: String, synchronized: Boolean) {
         if (closed || epoch != ready.server_epoch) return
         if (this.conversation != conversation) {
+            headPat?.cancel()
             this.conversation = conversation
             context = context?.copy(conversationId = conversation)
             playback.reset(); lastMouth = null
         }
         val becameReady = !synced && synchronized
         synced = synchronized
-        if (!synchronized) sequence.detached()
+        if (!synchronized) { sequence.detached(); headPat?.cancel() }
         if (becameReady && available()) {
             if (currentLoad == null) requestLoad() else display()
         }
@@ -79,12 +82,16 @@ class CharacterSession(
             val candidate = ExtensionContext(ready.registration_generation, ready.server_epoch, message.connection_generation, conversation)
             try { ExtensionCodec.validate(message, candidate, capabilities, "from_pc") } catch (_: ProtocolException) { return }
             context = candidate
+            if ("character_controls_v1" in capabilities) {
+                headPat = HeadPatSession(candidate, send = { send(it) }, visual = { value -> render { it.post("head_pat", wire(value)) } }, nowMillis = nowMillis)
+            }
             if (available()) requestLoad()
             return
         }
         val current = context ?: return
         try { ExtensionCodec.validate(message, current, capabilities, "from_pc") } catch (_: ProtocolException) { return }
         when (message) {
+            is HeadPatState -> headPat?.receive(message, available() && state.status == "ready")
             is CharacterChanged -> if (sequence.changed(message.state_revision, message.model_version) && available()) requestLoad()
             is CharacterAction -> {
                 val before = sequence.observedAction
@@ -112,17 +119,29 @@ class CharacterSession(
 
     fun attach(value: CharacterRenderer) {
         if (closed) return
+        if (renderer !== value) headPat?.cancel()
         renderer = value; sequence.detached(); lastMouth = null
         if (available()) display()
     }
 
     fun detach(value: CharacterRenderer) {
         if (renderer !== value) return
+        headPat?.cancel()
         renderer = null; sequence.detached(); lastMouth = null
     }
 
     fun event(source: CharacterRenderer, event: CharacterEvent) {
-        if (closed || renderer !== source || !available()) return
+        if (closed || renderer !== source) return
+        if (event.type == "head_pat_input") {
+            val input = event.input ?: return
+            if (available() && state.status == "ready" && headPat != null) headPat?.input(input)
+            else render { it.post("head_pat", buildJsonObject {
+                put("model_version", input.modelVersion); put("interaction_id", input.interactionId)
+                put("source", "phone"); put("phase", "rejected")
+            }) }
+            return
+        }
+        if (!available()) return
         when (event.type) {
             "ready" -> {
                 val version = event.modelVersion ?: return
@@ -203,6 +222,9 @@ class CharacterSession(
     private fun publish(status: String, error: String? = null) {
         val next = state.copy(status = status, errorCode = error)
         if (next != state) { state = next; onState(next) }
+        val snapshot = sequence.snapshot
+        val enabled = snapshot?.json?.get("settings")?.jsonObject?.get("enable_head_pat")?.jsonPrimitive?.booleanOrNull ?: true
+        headPat?.configure(snapshot?.modelVersion, available() && status == "ready" && enabled)
     }
 
     private fun render(block: (CharacterRenderer) -> Unit) {
@@ -213,14 +235,16 @@ class CharacterSession(
     private fun closeMedia() { runCatching { media?.close() } }
 
     private fun fail(code: String) {
-        if (closed) return
+        if (closed || failed) return
         failed = true; pending = false; token?.set(false); closeMedia(); download?.cancel()
+        headPat?.cancel()
         sequence.detached(); playback.reset()
         publish("error", code)
     }
 
     fun shutdown() {
         if (closed) return
+        headPat?.cancel()
         closed = true; pending = false; token?.set(false); closeMedia()
         download?.cancel(); worker?.cancel(); timer.cancel()
         currentLoad?.close(); currentLoad = null; renderer = null
