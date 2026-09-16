@@ -4,7 +4,7 @@
 
 ## 준비와 기본 사용
 
-1. PC ENE의 `codex/companion-lan-v1` 작업 브랜치에서 ENE와 동반 앱 서버를 실행한다. PC를 끄면 앱 단독으로 대화하거나 음성을 만들 수 없다.
+1. PC ENE의 로컬 `main`에서 ENE와 동반 앱 서버를 실행한다. PC를 끄면 앱 단독으로 대화하거나 음성을 만들 수 없다.
 2. PC와 폰을 같은 개인 LAN에 연결하고 QR을 스캔한 뒤 PC에서 등록을 명시적으로 승인한다. PC가 유선이어도 같은 LAN이면 사용할 수 있도록 설계했다. 실제 LAN 시험은 별도다.
 3. 전체 대화 동기화가 끝난 뒤 메시지를 보낸다. 기존 채팅 안에 캐릭터와 음성 출력 상태가 표시된다. 작은 화면·큰 글자·키보드에서는 캐릭터가 접힐 수 있지만 확인된 모델의 공통 설정은 사용할 수 있다.
 4. 캐릭터 공통 설정에서 움직임·쓰다듬기·표정·허용된 장식을 조정한다. 부분 펼침/확장을 지원하며, 미전송 미리보기는 닫으면 취소된다. 이미 보낸 저장을 닫기로 되돌리지는 않는다.
@@ -44,21 +44,22 @@ PC 내부의 기분 계산처럼 최종 텍스트로 표현되는 기능은 기�
 
 ## 자동 검증과 산출물
 
-PC 구현·검증 커밋 `a66b9239`, Android `03c1a56` 기준이다. 문서 전용 후속 커밋은 앱 동작을 바꾸지 않는다.
+PC 구현·검증 커밋 `a66b9239`, Android `03c1a56` 기준이다. 2026-09-17 사용자 승인으로 문서 포함 PC `802f2874`와 Android `dff9f44`를 각 저장소 로컬 `main`에 fast-forward 병합했다. 문서 전용 후속 커밋은 앱 동작을 바꾸지 않는다.
 
-- PC: 전체 3976개 통과·1개 제외, 84.02초. 실제 Qt/TLS와 합성 AI/TTS로 저장·쓰다듬기·대화·음성을 결합했다.
-- Android: 44개 클래스·254개 시험 통과, 실패·오류·제외 0. Lint 오류 0·기존 경고 27개. offline strict 전체 단위/Lint/개발·계측 APK 빌드 성공, 52초. 최종 문서 대조에서 확인한 캐시 삭제·상태 비보관 보완 시험 8개를 포함한다.
+- PC: 병합 후 전체 3976개 통과·1개 제외, 83.91초. 실제 Qt/TLS와 합성 AI/TTS로 저장·쓰다듬기·대화·음성을 결합했다.
+- Android: 병합 후 44개 클래스·254개 시험 통과, 실패·오류·제외 0. Lint 오류 0·기존 경고 27개. offline strict 전체 단위 재실행 51초, Lint/개발·계측 APK 빌드 15초. 최종 문서 대조에서 확인한 캐시 삭제·상태 비보관 보완 시험 8개를 포함한다.
 - PC·앱 반복 수명 시험은 각각 20회. 실제 Android 렌더러/스피커가 아니라 시험 대역과 JavaScript 실행 환경을 사용했다.
 - 앱 APK 557항목 중 캐릭터 21항목. 허용 실행부·고지 20개는 고정 해시와 일치하며 개인 설정·시험 CA·개인키·모델 경로 후보는 없었다.
 
 ```powershell
-.\gradlew.bat :app:testDebugUnitTest :app:lintDebug :app:assembleDebug :app:assembleDebugAndroidTest --offline --dependency-verification strict --console=plain
+.\gradlew.bat :app:testDebugUnitTest --rerun-tasks --offline --dependency-verification strict --console=plain
+.\gradlew.bat :app:lintDebug :app:assembleDebug :app:assembleDebugAndroidTest --offline --dependency-verification strict --console=plain
 ```
 
-APK: `app/build/outputs/apk/debug/app-debug.apk`, 37,696,722바이트.
+병합 후 다시 빌드한 APK: `app/build/outputs/apk/debug/app-debug.apk`, 37,696,650바이트.
 
-SHA-256: `71c626aa665fb757f2d072c5b62bf391d28b662aee58d9840a095a1e742639ed`
+SHA-256: `8aea6d200aa38d86f2dd6917134731de84b5ae724e287530a7a078de418d74a7`
 
 실기기에서 남은 항목은 설치·LAN 왕복·QR/권한/Keystore·프로세스 재생성·WebGL·모델 외형·손가락 입력·글자 확대·홈/잠금/회전·오디오 포커스·블루투스·체감 지연·발열이다. 계측 APK는 컴파일했지만 실행하지 않았다. Tailscale·외부망·실제 유료 제공자 호출·방화벽 변경·release 서명·GitHub 게시도 수행하지 않았다.
 
-공개 배포 전에는 Cubism 실행부와 각 모델의 사용·재배포 권리, 저장소 전체 히스토리와 APK 개인정보를 별도로 확인해야 한다. 번들 고지와 해시 점검은 권리 승인을 대신하지 않는다. PC·앱 저장소와 작업 브랜치는 각각 보존되어 있다.
+공개 배포 전에는 Cubism 실행부와 각 모델의 사용·재배포 권리, 저장소 전체 히스토리와 APK 개인정보를 별도로 확인해야 한다. 번들 고지와 해시 점검은 권리 승인을 대신하지 않는다. PC·앱은 독립 저장소이며 구현 커밋은 각각 로컬 `main`에 보존되어 있다.
