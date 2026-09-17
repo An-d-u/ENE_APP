@@ -21,7 +21,7 @@ JDK 21, Android SDK 36/Build Tools 35.0.0과 공식 의존성 캐시가 필요�
 .\gradlew.bat :app:assembleDebug --offline --dependency-verification strict --console=plain
 ```
 
-결과는 `app/build/outputs/apk/debug/app-debug.apk`다. APK·빌드 캐시·개인키·등록 파일은 커밋하지 않는다. ENE_APP은 PC ENE와 별도 Git 저장소이며 PC 쪽 코드는 기존 격리 작업 트리에서 유지한다.
+결과는 `app/build/outputs/apk/debug/app-debug.apk`다. APK·빌드 캐시·개인키·등록 파일은 커밋하지 않는다. ENE_APP과 PC ENE는 각각 독립 저장소다. 두 저장소를 같은 상위 폴더의 `ENE`, `ENE_APP`에 배치했다면 각 저장소 루트에서 해당 빌드 명령을 실행한다. 보관한 정리 전 저장소는 개발·push에 사용하지 않는다.
 
 ## 단말 선택과 설치
 
@@ -34,7 +34,7 @@ adb -s <선택한-단말> install -r app/build/outputs/apk/debug/app-debug.apk
 
 ## 같은 개인 LAN에서 기본 연결 확인
 
-1. PC의 companion 작업 트리에서 `.venv\Scripts\python.exe -m tools.companion_smoke`를 실행한다. 이 도구는 합성 대화와 임시 등록만 쓰며 실제 AI·기억을 호출하지 않는다.
+1. PC의 정리된 ENE 저장소 루트에서 `.venv\Scripts\python.exe -m tools.companion_smoke`를 실행한다. 가상환경을 다른 경로에서 옮겼다면 먼저 현재 경로에서 다시 생성한다. 이 도구는 합성 대화와 임시 등록만 쓰며 실제 AI·기억을 호출하지 않는다.
 2. PC(유선 가능)와 휴대폰을 같은 개인 LAN에 연결한다. 공유기의 기기 격리/게스트 Wi-Fi는 통신을 막을 수 있다.
 3. 앱에서 QR 연결 → 카메라 권한 허용 → PC QR 스캔 → PC에서 명시 승인한다. 승인 전 앱 등록이 생성되지 않는지 확인한다.
 4. 새로 만든 중립 시험 문장을 전송한다. 앱 대화와 PC의 가상 응답 계수가 한 번씩만 증가하는지 확인한다. 실제 개인 대화는 시험 자료로 쓰지 않는다.
