@@ -4,9 +4,9 @@
 
 ## 빌드
 
-공개 저장소는 소스와 빌드 안내만 제공하며 완성 APK·Core·SDK·모델은 제공하지 않는다. 사용자가 [Live2D 공식 SDK 페이지](https://www.live2d.com/en/sdk/download/web/)에서 약관을 확인하고 직접 받은 SDK의 `Core/live2dcubismcore.min.js`를 `app/src/main/assets/character/lib/live2dcubismcore.min.js`에 배치한다. 원본 고지를 유지하고 SDK는 저장소 밖이나 제외된 `local-sdk/`에 보관한다.
+공개 저장소는 소스와 빌드 안내만 제공하며 완성 APK·Core·SDK·모델은 제공하지 않는다. 사용자가 [Live2D 공식 SDK 페이지](https://www.live2d.com/en/sdk/download/web/)에서 약관을 확인한 뒤 **Cubism Core for Web → Cubism 5.2** 항목의 파일을 직접 저장하고 `app/src/main/assets/character/lib/live2dcubismcore.min.js`에 배치한다. **Cubism 5.2 (Legacy URL)**도 같은 파일이다. 원본 고지를 유지한다. 전체 SDK는 필수가 아니며, 보유한 SDK의 `Core/live2dcubismcore.min.js`를 쓸 때도 아래 해시가 일치해야 한다. SDK는 저장소 밖이나 제외된 `local-sdk/`에 보관한다.
 
-검증된 Core SHA-256은 `25ae938cb4fe282ce189b357bcc97e603d1e1f7ec78bf04150d401c23cdc792f`이다. 다른 버전이면 호환성 검토와 manifest 갱신이 필요하다. 검사를 끄거나 비공식 미러를 사용하지 않는다. Core 분리만으로 확장성 앱의 출시 허가가 해결되지는 않는다.
+검증된 Core SHA-256은 `25ae938cb4fe282ce189b357bcc97e603d1e1f7ec78bf04150d401c23cdc792f`, 크기는 207,155바이트, Core API 버전은 `83951616`(5.1.0)이다. 제품 표기 Cubism 5.2와 Core 자체 버전은 다르다. 2026-09-17에 공식 두 경로의 해시를 대조했다. [공식 다운로드 안내 데이터](https://cubism.live2d.com/sdk-web/js/download.js)의 최신 SDK R5 또는 Core Latest/Cubism 5.3을 호환 버전으로 가정하지 않는다. 다른 버전이면 호환성 검토와 manifest 갱신이 필요하다. 검사를 끄거나 비공식 미러를 사용하지 않는다. Core 분리만으로 확장성 앱의 출시 허가가 해결되지는 않는다.
 
 ```powershell
 .\gradlew.bat :app:verifyLocalCore --offline --dependency-verification strict --console=plain
