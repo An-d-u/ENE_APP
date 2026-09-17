@@ -15,6 +15,8 @@ class CharacterRuntimeTest {
         assertEquals(1, manifest.getValue("runtime_version").jsonPrimitive.int)
         val files = manifest.getValue("files").jsonArray
         assertEquals(20, files.size)
+        val localOnly = manifest.getValue("local_only_files").jsonArray.map { it.jsonPrimitive.content }.toSet()
+        assertEquals(setOf("lib/live2dcubismcore.min.js"), localOnly)
         val targets = mutableSetOf<String>()
         val policy = CharacterRequestPolicy(null, emptyMap())
         for (element in files) {
@@ -22,13 +24,15 @@ class CharacterRuntimeTest {
             val target = entry.getValue("target").jsonPrimitive.content
             assertTrue(targets.add(target))
             assertFalse(target.contains("..") || target.startsWith("/") || target.contains('\\'))
+            if (target in localOnly && !File(root, target).exists()) continue
             val bytes = File(root, target).readBytes()
             val hash = MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
             assertEquals(entry.getValue("sha256").jsonPrimitive.content, hash)
             val request = policy.resolve("${CharacterRequestPolicy.ORIGIN}/character/$target", "GET", target == "index.html")
             if (target.startsWith("notices/")) assertNull(request) else assertNotNull(request)
         }
-        assertEquals(targets + "import-manifest.json", root.walkTopDown().filter { it.isFile }.map { it.relativeTo(root).invariantSeparatorsPath }.toSet())
+        val present = targets.filter { it !in localOnly || File(root, it).exists() }.toSet()
+        assertEquals(present + "import-manifest.json", root.walkTopDown().filter { it.isFile }.map { it.relativeTo(root).invariantSeparatorsPath }.toSet())
         for (library in manifest.getValue("libraries").jsonArray) {
             for (notice in library.jsonObject.getValue("notices").jsonArray) assertTrue(notice.jsonPrimitive.content in targets)
         }

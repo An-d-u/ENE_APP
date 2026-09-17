@@ -1,4 +1,12 @@
 # 개인 환경과 빌드 산출물은 저장소에 포함하지 않는다.
+# Core·SDK·모델은 사용자가 직접 준비하며 공개하지 않는다.
+app/src/main/assets/character/lib/live2dcubismcore.min.js
+local-sdk/
+CubismSdkFor*/
+CubismSdkFor*.zip
+*.moc3
+*.cmo3
+*.can3
 local.properties
 .gradle/
 .kotlin/

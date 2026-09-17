@@ -44,7 +44,7 @@ D3 캐릭터 계열·쓰다듬기·확장 계약 JVM 검증은 15개 클래스 7
 
 ## 실행부 출처와 빌드 고정
 
-PC의 `tools/export_companion_character.py`가 명시 목록 20개와 해시·고지를 확인해 `app/src/main/assets/character`로 복사한다. 함께 보관한 `import-manifest.json`으로 독립 앱 checkout에서도 목록과 SHA-256을 검사한다. 앱 쪽 복사본을 직접 수정하지 않고 PC 원본 변경 후 내보낸다. 모델·일반 설정·대화 파일은 내보내지 않는다.
+PC의 `tools/export_companion_character.py`는 명시 목록 20개 중 Core를 제외한 소스·라이브러리·고지 19개와 manifest만 `app/src/main/assets/character`로 복사한다. Core는 사용자가 공식 SDK를 직접 받아 설치한다. 정상적인 기존 로컬 Core는 내보내기가 덮어쓰지 않는다. 함께 보관한 `import-manifest.json`으로 독립 앱 checkout에서도 목록과 SHA-256을 검사한다. Core 없이 JVM 소스 검사는 가능하지만 APK/AAB 빌드는 Core 설치와 해시 검증이 필수다. 앱 쪽 소스 복사본은 PC 원본 변경 후 내보낸다. 모델·일반 설정·대화 파일은 내보내지 않는다.
 
 Pixi 7.3.0, pixi-live2d-display 0.4.0-cubism4, 고정 Cubism Core의 출처·원문 고지는 가져오기 manifest와 `notices/`에 있다. 기존 PC 조합을 유지했으며 실제 기기의 WebGL 호환성과 공개 배포 권리 검토는 별도 확인 사항이다. SDK/모델 재배포가 자동 승인됐다는 의미가 아니다.
 

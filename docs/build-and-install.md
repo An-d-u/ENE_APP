@@ -4,6 +4,17 @@
 
 ## 빌드
 
+공개 저장소는 소스와 빌드 안내만 제공하며 완성 APK·Core·SDK·모델은 제공하지 않는다. 사용자가 [Live2D 공식 SDK 페이지](https://www.live2d.com/en/sdk/download/web/)에서 약관을 확인하고 직접 받은 SDK의 `Core/live2dcubismcore.min.js`를 `app/src/main/assets/character/lib/live2dcubismcore.min.js`에 배치한다. 원본 고지를 유지하고 SDK는 저장소 밖이나 제외된 `local-sdk/`에 보관한다.
+
+검증된 Core SHA-256은 `25ae938cb4fe282ce189b357bcc97e603d1e1f7ec78bf04150d401c23cdc792f`이다. 다른 버전이면 호환성 검토와 manifest 갱신이 필요하다. 검사를 끄거나 비공식 미러를 사용하지 않는다. Core 분리만으로 확장성 앱의 출시 허가가 해결되지는 않는다.
+
+```powershell
+.\gradlew.bat :app:verifyLocalCore --offline --dependency-verification strict --console=plain
+.\gradlew.bat :app:testDebugUnitTest --offline --dependency-verification strict --console=plain
+```
+
+JVM 소스 검사는 Core 없이도 가능하지만 APK/AAB의 assets를 합치는 단계는 Core 누락·해시 불일치를 차단한다. `--offline`은 의존성 캐시가 준비된 환경용이다. 처음 빌드할 때 필요한 의존성을 받으려면 이 옵션만 생략하고 strict 검증은 유지한다. Core는 어느 경우에도 자동 다운로드하지 않는다.
+
 JDK 21, Android SDK 36/Build Tools 35.0.0과 공식 의존성 캐시가 필요하다. 로컬 SDK 주소는 Git에서 제외된 `local.properties`로 관리한다. 버전 잠금과 해시 검증을 끄지 않는다.
 
 ```powershell

@@ -1,8 +1,30 @@
+import groovy.json.JsonSlurper
+import java.security.MessageDigest
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.kotlin.serialization)
+}
+
+// 사용자가 공식 SDK에서 직접 배치한 Core만 로컬 빌드에 사용한다.
+val verifyLocalCore by tasks.registering {
+    val core = layout.projectDirectory.file("src/main/assets/character/lib/live2dcubismcore.min.js")
+    val manifest = layout.projectDirectory.file("src/main/assets/character/import-manifest.json")
+    inputs.files(core)
+    inputs.file(manifest)
+    doLast {
+        val guide = "https://www.live2d.com/en/sdk/download/web/ 에서 약관 확인 후 Core를 직접 받아 배치하세요. docs/build-and-install.md 참조."
+        if (!core.asFile.isFile || core.asFile.length() > 2 * 1024 * 1024) throw GradleException("로컬 Core 누락 또는 크기 오류. $guide")
+        val contract = JsonSlurper().parse(manifest.asFile) as Map<*, *>
+        val target = "lib/live2dcubismcore.min.js"
+        if (contract["local_only_files"] != listOf(target)) throw GradleException("수동 Core 설치 계약 오류")
+        val expected = (contract["files"] as List<*>).map { it as Map<*, *> }.single { it["target"] == target }["sha256"] as String
+        val actual = MessageDigest.getInstance("SHA-256").digest(core.asFile.readBytes()).joinToString("") { "%02x".format(it) }
+        if (actual != expected) throw GradleException("로컬 Core 해시가 다릅니다. 기존 파일은 보존합니다. $guide")
+        logger.lifecycle("로컬 Core 해시 검사 통과. 공개 배포 허가를 의미하지 않습니다.")
+    }
 }
 
 // 기기 시험에 고정 만료 인증서나 개인키를 커밋하지 않는다.
@@ -50,6 +72,8 @@ android {
 }
 
 tasks.configureEach {
+    // JVM 소스 검사는 허용하되 APK/AAB의 assets는 설치된 Core를 필수 검사한다.
+    if (name.startsWith("merge") && name.endsWith("Assets")) dependsOn(verifyLocalCore)
     if (name.startsWith("merge") && name.endsWith("AndroidTestAssets")) dependsOn(generateTlsTestCa)
     // Lint도 계측 assets를 읽는다. 검사와 시험 APK를 함께 빌드할 때 생성 순서를 보장한다.
     if ((name.startsWith("lintAnalyze") && name.endsWith("AndroidTest")) ||
