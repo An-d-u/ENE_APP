@@ -5,6 +5,7 @@ import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createComposeRule
 import dev.ene.companion.connection.ConnectionPhase
 import dev.ene.companion.connection.ConnectionViewState
+import dev.ene.companion.connection.AudioOutputStatus
 import dev.ene.companion.ui.CameraPermissionNotice
 import dev.ene.companion.ui.ConnectionStatus
 import org.junit.Assert.assertEquals
@@ -32,8 +33,9 @@ class PairingPermissionTest {
     }
 
     @Test fun phoneAudioOutputIsExplainedWithoutManualSelector() {
-        compose.setContent { MaterialTheme { ConnectionStatus(ConnectionViewState(phase = ConnectionPhase.CONNECTED, audioOutput = "phone")) } }
-        compose.onNodeWithText("휴대폰에서 음성 재생 중").assertIsDisplayed()
+        compose.setContent { MaterialTheme { ConnectionStatus(ConnectionViewState(phase = ConnectionPhase.CONNECTED,
+            audioOutput = AudioOutputStatus("auto", "phone", "playing", "playing"))) } }
+        compose.onNodeWithText("자동 선택 · 휴대폰 재생 중").assertIsDisplayed()
         compose.onNodeWithText("음성 출력 선택").assertDoesNotExist()
     }
 }
