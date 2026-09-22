@@ -8,6 +8,13 @@ class ConnectionException(val code: String) : Exception(code)
 
 enum class ConnectionPhase { UNREGISTERED, CONNECTING, AWAITING_APPROVAL, SYNCING, CONNECTED, RECONNECTING, PAUSED, ACTION_REQUIRED }
 
+data class AudioOutputStatus(
+    val preference: String? = null,
+    val output: String? = null,
+    val state: String? = null,
+    val reason: String? = null,
+)
+
 data class ConnectionViewState(
     val phase: ConnectionPhase = ConnectionPhase.UNREGISTERED,
     val registered: Boolean = false,
@@ -17,7 +24,7 @@ data class ConnectionViewState(
     val processing: ProcessingState = ProcessingState("idle"),
     val draft: String = "",
     val sendState: String? = null,
-    val audioOutput: String = "pc",
+    val audioOutput: AudioOutputStatus = AudioOutputStatus(),
 ) {
     val canSend: Boolean get() = phase == ConnectionPhase.CONNECTED && processing.phase == "idle" && sendState == null && draft.isNotBlank()
     override fun toString(): String = "ConnectionViewState(phase=$phase)"

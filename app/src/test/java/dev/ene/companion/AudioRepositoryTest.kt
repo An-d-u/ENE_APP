@@ -56,7 +56,7 @@ class AudioRepositoryTest {
             assertEquals(1, transport.socket.sent.filterIsInstance<AudioPrepared>().size)
             transport.socket.offer(AudioStart(1, audioId(1), audioId(2), audioId(3), audioId(4), audioId(5), audioId(6)))
             runCurrent()
-            assertEquals("phone", repo.state.value.audioOutput)
+            assertEquals("phone", repo.state.value.audioOutput.output)
             repo.activityResumed(false)
             assertEquals(1, platform.sinks.single().stops)
             assertFalse(transport.socket.cancelled)

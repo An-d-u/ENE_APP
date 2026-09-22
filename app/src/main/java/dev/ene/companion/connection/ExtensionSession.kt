@@ -14,7 +14,7 @@ internal class ExtensionSession(
     private val send: (WireMessage) -> Boolean,
     private val nowMillis: () -> Long,
     private val isPublicAssistant: (String) -> Boolean,
-    private val onOutput: (String) -> Unit,
+    private val onOutput: (AudioOutputStatus) -> Unit,
     private val onFailure: (String) -> Unit,
     extraCapabilities: Set<String> = emptySet(),
     private val onPlayback: (CharacterPlayback) -> Unit = {},
@@ -29,8 +29,10 @@ internal class ExtensionSession(
     private var synced = false
     private var closed = false
     private var mode = "auto"
-    private var output: String? = null
-    private var lastAvailability: Pair<ExtensionContext, Boolean>? = null
+    private var output: AudioOutputStatus? = null
+    private var reported = AudioOutputStatus()
+    private var localFailure: String? = null
+    private var lastAvailability: Triple<ExtensionContext, Boolean, String>? = null
     private data class Pending(val offer: AudioOffer, val since: Long, var end: AudioSourceEnd? = null)
     private var pending: Pending? = null
     private class Entry(val ref: AudioRef, val state: AudioSession, val player: PcmPlayer,
@@ -92,6 +94,8 @@ internal class ExtensionSession(
         catch (_: ProtocolException) { return }
         if (message is AudioStatus) {
             mode = message.mode
+            reported = AudioOutputStatus(message.preference, message.output, message.state, message.reason)
+            if (message.state in setOf("preparing", "playing", "stopped") || message.reason != "ready") localFailure = null
             if (mode != "auto") {
                 pending?.let { reject(it.offer.ref(), "output_disabled") }; pending = null
                 active?.let { terminate(it, "output_disabled") }
@@ -108,7 +112,9 @@ internal class ExtensionSession(
                 reject(message.ref(), "audio_busy"); return
             }
             pending = Pending(message, nowMillis())
+            localFailure = null
             startPending()
+            publishOutput()
             return
         }
         val ref = message.refOrNull() ?: return
@@ -120,7 +126,7 @@ internal class ExtensionSession(
                         pending = null; reject(ref, "frame_mismatch")
                     } else waiting.end = message
                 }
-                is AudioCancel -> pending = null
+                is AudioCancel -> { pending = null; localFailure = message.reason; publishOutput() }
                 else -> Unit
             }
             return
@@ -151,7 +157,7 @@ internal class ExtensionSession(
                     terminate(entry, "playback_timeout", "audio_cancel")
                 }
             }
-            is AudioCancel -> terminate(entry, "pc_cancelled", notify = null)
+            is AudioCancel -> terminate(entry, message.reason, notify = null)
             else -> Unit
         }
     }
@@ -277,10 +283,16 @@ internal class ExtensionSession(
             try { entry.reader?.join() } finally { entry.player.close() }
         }.also { it.start() }
         if (kind != null && !closed) emit(entry.ref.wire(kind) { put("reason", reason) })
+        localFailure = if (reason == "finished") null else reason
+        if (reason == "finished") reported = reported.copy(output = "none", state = "idle", reason = "finished")
         publishOutput()
     }
 
-    private fun reject(ref: AudioRef, reason: String) = emit(ref.wire("audio_rejected") { put("reason", reason) })
+    private fun reject(ref: AudioRef, reason: String) {
+        localFailure = reason
+        emit(ref.wire("audio_rejected") { put("reason", reason) })
+        publishOutput()
+    }
     private fun characterPlayback(entry: Entry, mouth: Double, active: Boolean) {
         val ref = entry.ref
         // 화면 오류가 실제 음성 재생을 중단시키지 않도록 표시 콜백은 별도 실패 경계에 둔다.
@@ -294,15 +306,30 @@ internal class ExtensionSession(
     }
     private fun availability() {
         val current = context ?: return
+        if ("audio_pcm_v1" !in capabilities) {
+            reported = AudioOutputStatus(reason = "audio_not_negotiated")
+            publishOutput()
+            return
+        }
         val value = available()
-        if (lastAvailability == current to value) return
-        lastAvailability = current to value
+        val reason = if (value) "ready" else if (!activeScreen) "inactive" else "syncing"
+        val next = Triple(current, value, reason)
+        if (lastAvailability == next) return
+        lastAvailability = next
+        if (active == null && pending == null && localFailure == null) reported = reported.copy(reason = reason)
         emit(AudioAvailability(current.registrationGeneration, current.serverEpoch, current.connectionGeneration,
-            value, current.conversationId, if (value) "ready" else if (!activeScreen) "inactive" else "syncing"))
+            value, current.conversationId, reason))
+        publishOutput()
     }
     private fun publishOutput() {
-        val value = if (active?.state?.state == "PLAYING") "phone" else if (mode == "pc_only") "unsupported" else "pc"
-        if (output != value) { output = value; onOutput(value) }
+        val value = when {
+            closed -> reported.copy(output = "none", state = "stopped", reason = "connection_closed")
+            active?.state?.state == "PLAYING" -> reported.copy(output = "phone", state = "playing", reason = "playing")
+            active != null || pending != null -> reported.copy(output = "none", state = "preparing", reason = "preparing")
+            localFailure != null -> reported.copy(output = "none", state = "stopped", reason = localFailure)
+            else -> reported
+        }
+        if (output != value) { output = value; runCatching { onOutput(value) } }
     }
     private fun failConnection(reason: String) {
         if (closed) return

@@ -227,7 +227,7 @@ class ConnectionRepository(
                         if (ready.server_id != credentials.serverId || ready.registration_generation != credentials.generation) throw ConnectionException("registration_changed")
                         if (ready.capabilities.any { it !in requested }) throw ConnectionException("invalid_server_info")
                         mutableState.value = mutableState.value.copy(phase = ConnectionPhase.SYNCING, endpoint = endpoint, errorCode = null,
-                            audioOutput = if ("audio_pcm_v1" in ready.capabilities) "pc" else "unsupported")
+                            audioOutput = AudioOutputStatus(reason = if ("audio_pcm_v1" in ready.capabilities) "syncing" else "audio_not_negotiated"))
                         val session = ConversationSession(ready, nowMillis)
                         val record = Active(credentials, session, socket)
                         active = record
