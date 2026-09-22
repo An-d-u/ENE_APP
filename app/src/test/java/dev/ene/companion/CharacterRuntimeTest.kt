@@ -14,7 +14,7 @@ class CharacterRuntimeTest {
         val manifest = Json.parseToJsonElement(File(root, "import-manifest.json").readText()).jsonObject
         assertEquals(1, manifest.getValue("runtime_version").jsonPrimitive.int)
         val files = manifest.getValue("files").jsonArray
-        assertEquals(20, files.size)
+        assertEquals(21, files.size)
         val localOnly = manifest.getValue("local_only_files").jsonArray.map { it.jsonPrimitive.content }.toSet()
         assertEquals(setOf("lib/live2dcubismcore.min.js"), localOnly)
         val targets = mutableSetOf<String>()
