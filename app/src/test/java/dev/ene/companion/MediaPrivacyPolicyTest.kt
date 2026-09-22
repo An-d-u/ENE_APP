@@ -14,7 +14,10 @@ class MediaPrivacyPolicyTest {
         assertTrue(manifest.isNotEmpty())
         val names = root.walkTopDown().filter { it.isFile }.map { it.relativeTo(root).invariantSeparatorsPath }.toList()
         val localCore = "lib/live2dcubismcore.min.js"
-        assertEquals(20 + if (localCore in names) 1 else 0, names.size)
+        val allowed = manifest.getValue("files").jsonArray.map { it.jsonObject.getValue("target").jsonPrimitive.content }
+            .filter { it != localCore || localCore in names }.toSet() + "import-manifest.json"
+        assertEquals(21 + if (localCore in names) 1 else 0, names.size)
+        assertEquals(allowed, names.toSet())
         for (name in names) assertFalse(name.endsWith(".model3.json") || name.endsWith(".moc3") ||
             name in setOf("script.js", "runtime_bridge.js", "runtime_settings.js", "config.json", "api_keys.json", "ca.der"))
         val view = File("src/main/java/dev/ene/companion/character/CharacterWebView.kt").readText()

@@ -76,4 +76,15 @@ class AudioOutputStatusTest {
         assertTrue(text.contains("휴대폰")); assertTrue(text.contains("준비 시간"))
         assertFalse(text.contains("PC 재생 중"))
     }
+
+    @Test fun pcFallbackStatusAfterCancelDescribesActualPcOutput() = runTest {
+        val f = AudioFixture(this)
+        try {
+            f.activate(); f.extension.receive(f.offer()); runCurrent()
+            f.extension.receive(AudioCancel(1, audioId(1), audioId(2), audioId(3), audioId(4), audioId(5), audioId(6), "pc_fallback"))
+            f.extension.receive(AudioStatus(1, audioId(1), audioId(2), "auto", "prepare_timeout", "auto", "pc", "playing"))
+            assertEquals(AudioOutputStatus("auto", "pc", "playing", "prepare_timeout"), f.outputs.last())
+            assertEquals(0, f.platform.sinks.single().starts)
+        } finally { f.extension.closeAndJoin() }
+    }
 }
