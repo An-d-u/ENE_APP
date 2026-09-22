@@ -36,6 +36,28 @@ class ExtensionCodecTest {
         assertEquals(setOf("audio_pcm_v1"), ExtensionCodec.negotiate(setOf("audio_pcm_v1", "unknown"), setOf("audio_pcm_v1")))
     }
 
+    @Test fun oldPcOmitsDetailsAndFrozenOldApkIgnoresNewFields() {
+        val old = sample("audio_status")
+        val decoded = ProtocolCodec.decode(old.toString()) as AudioStatus
+        assertNull(decoded.preference); assertNull(decoded.output); assertNull(decoded.state)
+        val extended = JsonObject(old + mapOf("preference" to JsonPrimitive("phone"),
+            "output" to JsonPrimitive("none"), "state" to JsonPrimitive("stopped")))
+        // 변경 전 해석기의 허용 목록과 필드 검사를 고정해 새 해석기와 독립적으로 검사한다.
+        val frozen = buildJsonObject {
+            put("type", "audio_status"); put("protocol_version", 1)
+            put("registration_generation", ProtocolCodec.integer(extended["registration_generation"], 1))
+            put("server_epoch", ProtocolCodec.uuid(extended["server_epoch"]))
+            put("connection_generation", ProtocolCodec.uuid(extended["connection_generation"]))
+            val mode = extended.getValue("mode").jsonPrimitive
+            require(mode.isString && mode.content in setOf("auto", "pc_only", "disabled"))
+            put("mode", mode)
+            val reason = extended.getValue("reason").jsonPrimitive
+            require(reason.isString && Regex("[a-z][a-z0-9_]{0,63}").matches(reason.content))
+            put("reason", reason)
+        }
+        assertEquals(old, frozen)
+    }
+
     @Test fun guardRejectsStaleUnnegotiatedAndWrongDirection() {
         val body = sample("audio_prepared")
         val message = ProtocolCodec.decode(body.toString()) as ExtensionMessage

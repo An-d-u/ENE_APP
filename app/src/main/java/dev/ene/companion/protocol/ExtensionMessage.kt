@@ -38,7 +38,10 @@ data class AudioStatus(
     override val server_epoch: String,
     override val connection_generation: String,
     val mode: String,
-    val reason: String
+    val reason: String,
+    val preference: String? = null,
+    val output: String? = null,
+    val state: String? = null,
 ) : ExtensionMessage()
 
 @Serializable @SerialName("audio_offer")

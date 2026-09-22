@@ -96,7 +96,13 @@ object ExtensionCodec {
                 put("available", bool(body["available"]))
                 put("conversation_id", ProtocolCodec.uuid(body["conversation_id"]))
             }
-            "audio_status" -> put("mode", choice(body["mode"], setOf("disabled", "pc_only", "auto")))
+            "audio_status" -> {
+                put("mode", choice(body["mode"], setOf("disabled", "pc_only", "auto")))
+                for ((key, values) in mapOf("preference" to setOf("auto", "pc", "phone"),
+                    "output" to setOf("none", "pc", "phone"), "state" to setOf("idle", "preparing", "playing", "stopped"))) {
+                    if (key in body) put(key, choice(body[key], values))
+                }
+            }
             "audio_offer" -> {
                 put("sample_rate", ProtocolCodec.integer(body["sample_rate"], 8000, 48000))
                 put("channels", ProtocolCodec.integer(body["channels"], 1, 2))
