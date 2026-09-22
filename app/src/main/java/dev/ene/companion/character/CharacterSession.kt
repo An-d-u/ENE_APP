@@ -158,12 +158,19 @@ class CharacterSession(
                 publish("ready"); publishMouth(force = true)
                 if (missedExpression > (sequence.snapshot?.actionSeq ?: 0)) { missedExpression = 0; requestLoad() }
             }
-            "unavailable", "error" -> fail("character_render_failed")
+            "unavailable" -> fail("character_render_failed")
+            "error" -> fail(rendererFailure(event.code))
         }
     }
 
     fun rendererFailed(source: CharacterRenderer, code: String) {
-        if (renderer === source) fail(if (code == "character_renderer_gone") code else "character_render_failed")
+        if (renderer === source) fail(rendererFailure(code))
+    }
+
+    private fun rendererFailure(code: String?): String = when (code) {
+        "character_bridge_timeout", "character_initialization_failed", "character_asset_failed",
+        "character_renderer_gone", "character_webview_unsupported", "character_navigation_blocked" -> code
+        else -> "character_render_failed"
     }
 
     fun retry() {

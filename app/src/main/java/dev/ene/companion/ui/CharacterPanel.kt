@@ -74,6 +74,7 @@ fun CharacterStatus(state: CharacterViewState, collapsed: Boolean, onRetry: () -
     }
     text?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
     if (state.status == "error") {
+        Text(characterFailureDescription(state.errorCode), style = MaterialTheme.typography.bodySmall)
         TextButton(onClick = onRetry, modifier = Modifier.heightIn(min = 48.dp)) { Text("캐릭터 다시 불러오기") }
     }
 }

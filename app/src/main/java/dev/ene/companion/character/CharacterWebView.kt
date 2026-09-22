@@ -11,6 +11,7 @@ import android.os.Message
 import android.webkit.*
 import android.widget.FrameLayout
 import androidx.webkit.WebMessageCompat
+import androidx.webkit.JavaScriptReplyProxy
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import kotlinx.serialization.json.JsonObject
@@ -38,15 +39,14 @@ class CharacterWebView(
     private val streams = mutableSetOf<InputStream>()
     @Volatile private var closed = false
     private var documentReady = false
-    private var initialized = false
+    private var replyProxy: JavaScriptReplyProxy? = null
     private var pending: CharacterSnapshot? = null
     private val handler = Handler(Looper.getMainLooper())
-    private val readinessTimeout = Runnable { if (!documentReady) fail("character_render_failed") }
+    private val readinessTimeout = Runnable { if (!documentReady) fail("character_bridge_timeout") }
 
     init {
         mainThread()
-        if (!bridgeSupported || !WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER) ||
-            !WebViewFeature.isFeatureSupported(WebViewFeature.POST_WEB_MESSAGE)) onFailure("character_webview_unsupported")
+        if (!bridgeSupported || !WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) onFailure("character_webview_unsupported")
         else try {
             val web = WebView(context)
             browser = web
@@ -88,12 +88,6 @@ class CharacterWebView(
                     override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
                         if (url != CharacterRequestPolicy.DOCUMENT) fail("character_navigation_blocked")
                     }
-                    override fun onPageFinished(view: WebView?, url: String?) {
-                        if (!closed && !initialized && url == CharacterRequestPolicy.DOCUMENT) {
-                            initialized = true
-                            send(bridge.initialize())
-                        }
-                    }
                     override fun onReceivedError(view: WebView?, request: WebResourceRequest, error: WebResourceError?) {
                         if (request.isForMainFrame) fail("character_render_failed")
                     }
@@ -103,10 +97,15 @@ class CharacterWebView(
                         return true
                     }
                 }
-                WebViewCompat.addWebMessageListener(web, "eneCharacterNative", setOf(CharacterRequestPolicy.ORIGIN)) { _, message, origin, mainFrame, _ ->
-                    if (message.type == WebMessageCompat.TYPE_STRING) {
+                WebViewCompat.addWebMessageListener(web, "eneCharacterNative", setOf(CharacterRequestPolicy.ORIGIN)) { view, message, origin, mainFrame, proxy ->
+                    if (!closed && view === browser && view.url == CharacterRequestPolicy.DOCUMENT && message.type == WebMessageCompat.TYPE_STRING) {
                         val event = bridge.receive(origin.toString(), mainFrame, message.data.orEmpty())
                         if (event != null) {
+                            if (event.type == "bridge_ready") {
+                                replyProxy = proxy
+                                send(bridge.initialize())
+                                return@addWebMessageListener
+                            }
                             if (event.type == "document_ready") {
                                 documentReady = true; handler.removeCallbacks(readinessTimeout)
                                 pending?.let { post("snapshot", it.json) }
@@ -156,10 +155,9 @@ class CharacterWebView(
     }
 
     private fun send(raw: String) {
-        val web = browser ?: return
-        if (!closed && WebViewFeature.isFeatureSupported(WebViewFeature.POST_WEB_MESSAGE)) {
-            WebViewCompat.postWebMessage(web, WebMessageCompat(raw), Uri.parse(CharacterRequestPolicy.ORIGIN))
-        }
+        if (closed) return
+        try { replyProxy?.postMessage(raw) }
+        catch (_: Exception) { fail("character_render_failed") }
     }
 
     private fun resource(url: String, method: String, mainFrame: Boolean): WebResourceResponse = synchronized(resourcesLock) {
@@ -188,7 +186,7 @@ class CharacterWebView(
     override fun close() {
         mainThread()
         if (closed) return
-        closed = true; pending = null; bridge.close()
+        closed = true; pending = null; replyProxy = null; bridge.close()
         handler.removeCallbacks(readinessTimeout)
         synchronized(resourcesLock) {
             streams.toList().forEach { runCatching { it.close() } }
@@ -210,8 +208,7 @@ class CharacterWebView(
         private val headers = mapOf("Cache-Control" to "no-store", "X-Content-Type-Options" to "nosniff",
             "Content-Security-Policy" to "default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self' blob:; connect-src 'self'; worker-src 'none'; frame-src 'none'; frame-ancestors 'none'; object-src 'none'; base-uri 'none'; form-action 'none'")
         private fun mainThread() { check(Looper.myLooper() == Looper.getMainLooper()) { "character_requires_main" } }
-        fun supported(): Boolean = runCatching { WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER) &&
-            WebViewFeature.isFeatureSupported(WebViewFeature.POST_WEB_MESSAGE) }.getOrDefault(false)
+        fun supported(): Boolean = runCatching { WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER) }.getOrDefault(false)
         private fun denied() = WebResourceResponse("text/plain", "UTF-8", 403, "Forbidden", headers, ByteArrayInputStream(ByteArray(0)))
     }
 }

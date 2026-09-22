@@ -31,6 +31,10 @@ class MediaPrivacyPolicyTest {
         repeat(20) { index ->
             val bridge = CharacterBridge(audioId(100 + index)); bridge.expectModel(model)
             val ready = buildJsonObject { put("type", "document_ready"); put("generation", bridge.generation) }.toString()
+            val hello = "{\"type\":\"bridge_ready\"}"
+            assertNull(bridge.receive("https://example.invalid", true, hello))
+            assertNull(bridge.receive(CharacterRequestPolicy.ORIGIN, false, hello))
+            assertNotNull(bridge.receive(CharacterRequestPolicy.ORIGIN, true, hello))
             assertNull(bridge.receive("https://example.invalid", true, ready))
             assertNotNull(bridge.receive(CharacterRequestPolicy.ORIGIN, true, ready))
             for (kind in listOf("save_settings", "open_url", "read_file", "increment_head_pat_count")) {

@@ -10,6 +10,7 @@ data class CharacterEvent(val type: String, val modelVersion: String? = null, va
 /** WebView의 출처/프레임 확인 뒤에도 문서 세대와 작은 허용 메시지만 수락한다. Main 전용. */
 class CharacterBridge(val generation: String = UUID.randomUUID().toString()) : Closeable {
     private var closed = false
+    private var initialized = false
     private var documentReady = false
     private var modelVersion: String? = null
     init { ProtocolCodec.uuid(JsonPrimitive(generation)) }
@@ -33,8 +34,19 @@ class CharacterBridge(val generation: String = UUID.randomUUID().toString()) : C
         if (closed || origin != CharacterRequestPolicy.ORIGIN || !mainFrame || raw.length > 2048) return null
         return try {
             val body = ProtocolCodec.readObject(raw, 2048)
-            if (ProtocolCodec.uuid(body["generation"]) != generation) return null
             val type = ProtocolCodec.text(body["type"])
+            if (type == "bridge_ready") {
+                if (initialized) return null
+                initialized = true
+                return CharacterEvent(type)
+            }
+            if (!initialized || ProtocolCodec.uuid(body["generation"]) != generation) return null
+            if (type == "error") {
+                val code = ProtocolCodec.text(body["code"])
+                return if (code == "character_initialization_failed" ||
+                    (documentReady && code in setOf("character_asset_failed", "character_render_failed")))
+                    CharacterEvent(type, code = code) else null
+            }
             if (type == "document_ready") {
                 if (documentReady) return null
                 documentReady = true
@@ -57,14 +69,10 @@ class CharacterBridge(val generation: String = UUID.randomUUID().toString()) : C
                     val version = if (body["model_version"] == JsonNull) null else CharacterSnapshot.digest(body["model_version"])
                     if (version != modelVersion || (type == "ready" && version == null)) null else CharacterEvent(type, version)
                 }
-                "error" -> {
-                    if (ProtocolCodec.text(body["code"]) != "character_render_failed") null
-                    else CharacterEvent(type, code = "character_render_failed")
-                }
                 else -> null
             }
         } catch (_: IllegalArgumentException) { null }
     }
 
-    override fun close() { closed = true; documentReady = false; modelVersion = null }
+    override fun close() { closed = true; initialized = false; documentReady = false; modelVersion = null }
 }

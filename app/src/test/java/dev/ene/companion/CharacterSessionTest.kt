@@ -37,6 +37,26 @@ class CharacterSessionTest {
         override fun post(type: String, value: JsonObject) { commands += type to value }
     }
 
+    @Test fun rendererFailureStagesArePreservedButUnknownDetailsAreDiscarded() = runTest {
+        for (code in listOf("character_bridge_timeout", "character_initialization_failed",
+            "character_asset_failed", "character_webview_unsupported", "synthetic private detail")) {
+            val f = Fixture(this) { result() }
+            f.activate(); advanceTimeBy(300); runCurrent()
+            f.session.rendererFailed(f.renderer, code)
+            assertEquals("error", f.states.last().status)
+            assertEquals(if (code.startsWith("character_")) code else "character_render_failed", f.states.last().errorCode)
+            f.session.closeAndJoin()
+        }
+    }
+
+    @Test fun rendererEventPreservesInitializationStage() = runTest {
+        val f = Fixture(this) { result() }
+        f.activate(); advanceTimeBy(300); runCurrent()
+        f.session.event(f.renderer, CharacterEvent("error", code = "character_initialization_failed"))
+        assertEquals("character_initialization_failed", f.states.last().errorCode)
+        f.session.closeAndJoin()
+    }
+
     @Test fun shutdownReleasesRendererOwnedMountAndStreamsBeforeCacheCleanup() = runTest {
         val cache = CharacterCache(temporary.newFolder())
         val model = snapshot()
