@@ -16,6 +16,7 @@ class CharacterSequence {
     private var expectedVersion: String? = null
     private var fetching = true
     private var rendererReady = false
+    val needsSnapshot: Boolean get() = fetching
 
     fun changed(revision: Long, version: String?): Boolean {
         if (revision <= minimumRevision) return false

@@ -112,6 +112,24 @@ class CharacterSessionTest {
         f.session.closeAndJoin()
     }
 
+    @Test fun pcSettingsChangedDuringBaseSyncAreFetchedOnResume() = runTest {
+        var model = snapshot()
+        var loads = 0
+        val f = Fixture(this, controls = true) { loads++; result(model) }
+        f.activate(); advanceTimeBy(300); runCurrent(); f.rendered()
+        f.session.baseState(audioId(1), audioId(3), false)
+        model = CharacterSnapshot.parse(JsonObject(model.json + mapOf(
+            "state_revision" to JsonPrimitive(2), "settings_revision" to JsonPrimitive(2),
+            "settings" to buildJsonObject { put("idle_motion_strength", 1.6) })).toString())
+        f.session.receive(CharacterChanged(1, audioId(1), audioId(2), 2, model.modelVersion, "settings_changed"))
+        advanceTimeBy(300); runCurrent(); assertEquals(1, loads)
+        f.session.baseState(audioId(1), audioId(3), true)
+        advanceTimeBy(300); runCurrent(); f.rendered()
+        assertEquals(2, loads)
+        assertEquals(2L, f.renderer.snapshots.last().settingsRevision)
+        f.session.closeAndJoin()
+    }
+
     @Test fun placementLoadBlocksOnlyRenderingAndLateResultIsAppliedBeforeSnapshot() = runTest {
         val f = Fixture(this) { result() }
         f.session.placement(CharacterPlacementState())

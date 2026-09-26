@@ -79,7 +79,7 @@ class CharacterSession(
                 publish("paused")
             }
         } else if (available()) {
-            if (currentLoad == null || state.status == "paused" || settings?.view?.busy == true) requestLoad() else display()
+            if (currentLoad == null || sequence.needsSnapshot || state.status == "paused" || settings?.view?.busy == true) requestLoad() else display()
         }
         publish(state.status, state.errorCode)
     }
@@ -97,7 +97,7 @@ class CharacterSession(
         synced = synchronized
         if (!synchronized) { headPat?.cancel(); settings?.available(false); publishSettings() }
         if (becameReady && available()) {
-            if (currentLoad == null || settings?.view?.busy == true) requestLoad() else display()
+            if (currentLoad == null || sequence.needsSnapshot || settings?.view?.busy == true) requestLoad() else display()
         }
         publish(state.status, state.errorCode)
     }
