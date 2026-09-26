@@ -2,10 +2,15 @@ package dev.ene.companion.ui
 
 import android.os.Handler
 import android.os.Looper
+import android.content.Context
+import android.view.View
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.contentDescription
@@ -22,19 +27,29 @@ internal fun characterPanelHeight(heightDp: Int, keyboard: Boolean, fontScale: F
     if (keyboard || heightDp < 480 || fontScale >= 1.5f) 0 else (heightDp / 4).coerceIn(96, 220)
 
 @Composable
-fun CharacterPanel(repository: ConnectionRepository) {
+fun CharacterPanel(repository: ConnectionRepository, controlsVisible: Boolean = true) {
     val state by repository.characterState.collectAsStateWithLifecycle()
+    val placement by repository.characterPlacement.collectAsStateWithLifecycle()
+    var placementOpen by remember { mutableStateOf(false) }
+    val keyboard = LocalSoftwareKeyboardController.current
+    val focus = LocalFocusManager.current
     val density = LocalDensity.current
     val height = characterPanelHeight((LocalWindowInfo.current.containerSize.height / density.density).toInt(),
         WindowInsets.ime.getBottom(density) > 0, density.fontScale)
-    val visible = state.status in setOf("rendering", "ready", "refreshing")
+    val panelVisible = controlsVisible && height > 0
+    SideEffect { repository.characterPanelVisible(panelVisible) }
+    DisposableEffect(repository) { onDispose { repository.characterPanelVisible(false); repository.finishCharacterPlacement() } }
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        CharacterStatus(state, visible && height == 0, repository::retryCharacter)
-        TextButton(onClick = repository::openCharacterSettings, enabled = state.settings.available && !state.settings.busy,
-            modifier = Modifier.heightIn(min = 48.dp)) { Text("캐릭터 공통 설정") }
-        if (visible && height > 0) key(state.viewGeneration) {
-            AndroidView(
-                modifier = Modifier.fillMaxWidth().height(height.dp).semantics { contentDescription = "ENE 캐릭터" },
+        if (controlsVisible) {
+            CharacterStatus(state, state.retainRenderer && height == 0, repository::retryCharacter)
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(onClick = repository::openCharacterSettings, enabled = state.settings.available && !state.settings.busy,
+                    modifier = Modifier.heightIn(min = 48.dp)) { Text("캐릭터 공통 설정") }
+                TextButton(onClick = { keyboard?.hide(); focus.clearFocus(); placementOpen = true },
+                    modifier = Modifier.heightIn(min = 48.dp)) { Text("휴대폰 표시 설정") }
+            }
+        }
+        CharacterSurface(state, placement.loaded, if (panelVisible) height else 0,
                 factory = { context ->
                     var mounted: CharacterWebView? = null
                     var startupFailure: String? = null
@@ -50,14 +65,32 @@ fun CharacterPanel(repository: ConnectionRepository) {
                     startupFailure?.let { code -> Handler(Looper.getMainLooper()).post { repository.characterFailed(view, code) } }
                     view
                 },
-                onReset = null,
                 onRelease = { view -> repository.detachCharacter(view); view.close() },
-                update = {},
             )
-        }
     }
     if (state.settings.open) CharacterSettingsSheet(state.settings, repository::closeCharacterSettings,
         repository::previewCharacterSettings, repository::submitCharacterSettings)
+    if (placementOpen) CharacterPlacementSheet(placement, repository::changeCharacterPlacement, repository::finishCharacterPlacement,
+        repository::resetCharacterPlacement, repository::retryCharacterPlacementSave,
+        { repository.finishCharacterPlacement(); placementOpen = false })
+}
+
+/** 표시 영역의 접힘과 뷰 소유권을 분리한다. 세대 교체와 실제 종료에서만 해제한다. */
+@Composable
+internal fun <T : View> CharacterSurface(state: CharacterViewState, placementLoaded: Boolean, height: Int,
+                                         factory: (Context) -> T, onRelease: (T) -> Unit) {
+    if (state.retainRenderer && placementLoaded) key(state.viewGeneration) {
+        val visible = state.presentationAllowed && height > 0
+        Box(Modifier.fillMaxWidth().height(if (visible) height.dp else 0.dp).clipToBounds()) {
+            AndroidView(factory = factory, onReset = null, onRelease = onRelease,
+                modifier = Modifier.fillMaxSize().semantics { if (visible) contentDescription = "ENE 캐릭터" },
+                update = { view ->
+                    view.visibility = if (visible) View.VISIBLE else View.INVISIBLE
+                    view.isEnabled = visible
+                    view.importantForAccessibility = if (visible) View.IMPORTANT_FOR_ACCESSIBILITY_AUTO else View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
+                })
+        }
+    }
 }
 
 @Composable
