@@ -16,10 +16,10 @@ class CharacterSessionTest {
     private val ready = Ready(audioId(9), audioId(1), audioId(3), 1, listOf("audio_pcm_v1", "character_v1"))
     private val payload = "{}".toByteArray()
     private fun snapshot() = CharacterSnapshot.parse(CharacterFixtures.manifest(payload))
-    private fun result(model: CharacterSnapshot = snapshot()): CharacterLoad {
+    private fun result(model: CharacterSnapshot = snapshot(), bytes: ByteArray = payload): CharacterLoad {
         val cache = CharacterCache(temporary.newFolder())
         val mount = cache.begin("1".repeat(64), model).use { ticket ->
-            ticket.open(model.entryAssetId!!).use { it.write(payload) }
+            ticket.open(model.entryAssetId!!).use { it.write(bytes) }
             ticket.commit()
         }
         return CharacterLoad(model, mount)
@@ -77,6 +77,38 @@ class CharacterSessionTest {
         }
         assertEquals(1, loads)
         assertTrue(f.renderer.presentations.last().second)
+        f.session.closeAndJoin()
+    }
+
+    @Test fun confirmedPcSettingsAndModelChangesNeverResetLocalPlacement() = runTest {
+        var model = snapshot()
+        var bytes = payload
+        val f = Fixture(this, controls = true) { result(model, bytes) }
+        val p = CharacterPlacement(1.5, 25.0, 75.0)
+        f.session.placement(CharacterPlacementState(p, loaded = true))
+        f.activate(); advanceTimeBy(300); runCurrent(); f.rendered()
+        val all = JsonObject(dev.ene.companion.ui.characterSettingFields.associate { field ->
+            field.key to when (field.kind) {
+                "bool" -> JsonPrimitive(false)
+                "expression" -> JsonPrimitive("bright")
+                else -> field.samples().last()
+            }
+        })
+        assertEquals(20, all.size)
+        for (revision in 2L..3L) {
+            if (revision == 3L) { bytes = "{\"synthetic\":true}".toByteArray(); model = CharacterSnapshot.parse(CharacterFixtures.manifest(bytes)) }
+            model = CharacterSnapshot.parse(JsonObject(model.json + mapOf("settings" to all,
+                "settings_revision" to JsonPrimitive(revision), "state_revision" to JsonPrimitive(revision))).toString())
+            f.session.receive(CharacterChanged(1, audioId(1), audioId(2), revision, model.modelVersion, "settings_changed"))
+            advanceTimeBy(300); runCurrent()
+            f.session.event(f.renderer, CharacterEvent("ready", model.modelVersion))
+            assertEquals(all, f.renderer.snapshots.last().json["settings"])
+            assertEquals(p to true, f.renderer.presentations.last())
+            f.session.openSettings(); f.session.previewSettings("head_pat_strength", JsonPrimitive(1.1), false)
+            f.session.closeSettings()
+            assertEquals(p to true, f.renderer.presentations.last())
+        }
+        assertTrue(f.sent.none { it is CharacterSettingsPatch })
         f.session.closeAndJoin()
     }
 
