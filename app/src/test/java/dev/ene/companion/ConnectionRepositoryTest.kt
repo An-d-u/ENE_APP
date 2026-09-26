@@ -3,7 +3,7 @@ package dev.ene.companion
 import dev.ene.companion.connection.*
 import dev.ene.companion.protocol.*
 import dev.ene.companion.storage.*
-import dev.ene.companion.character.CharacterPlatform
+import dev.ene.companion.character.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.test.*
@@ -16,6 +16,32 @@ import java.util.Base64
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class ConnectionRepositoryTest {
+    @Test fun localPlacementPersistsOutsideConnectionAndNeverSendsSettingsPatch() = runTest {
+        var stored: CharacterPlacement? = CharacterPlacement(1.5, 25.0, 75.0)
+        var writes = 0
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val storage = object : CharacterPlacementStorage {
+            override suspend fun load() = stored
+            override suspend fun save(value: CharacterPlacement) { stored = value; writes++ }
+        }
+        val placement = CharacterPlacementController(storage, backgroundScope, dispatcher)
+        val transport = Transport()
+        val repo = ConnectionRepository(Registrations(credentials()), Profiles(), { transport }, dispatcher,
+            dispatcher, dispatcher, placementController = placement)
+        try {
+            runCurrent()
+            assertEquals(stored, repo.characterPlacement.value.placement)
+            repo.changeCharacterPlacement(CharacterPlacement(1.8, 10.0, 90.0))
+            repo.finishCharacterPlacement(); runCurrent()
+            assertEquals(1, writes)
+            repo.forget(); runCurrent()
+            assertEquals(CharacterPlacement(1.8, 10.0, 90.0), repo.characterPlacement.value.placement)
+            assertEquals(1, writes)
+            assertTrue(transport.socket.sent.none { it is CharacterSettingsPatch })
+            val restored = CharacterPlacementController(storage, backgroundScope, dispatcher)
+            runCurrent(); assertEquals(stored, restored.state.value.placement)
+        } finally { repo.close(); runCurrent() }
+    }
     companion object {
         val ca by lazy { TlsTestCertificates.ca() }
         const val serverId = TlsTestCertificates.SERVER_ID

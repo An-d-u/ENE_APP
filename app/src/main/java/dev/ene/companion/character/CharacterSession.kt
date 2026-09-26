@@ -40,10 +40,32 @@ class CharacterSession(
     private var state = CharacterViewState()
     private var headPat: HeadPatSession? = null
     private var settings: CharacterSettingsState? = null
+    private var panelVisible = true
+    private var placement = CharacterPlacementState(loaded = true)
+    private var lastPresentation: Pair<CharacterPlacement, Boolean>? = null
     private val timer = scope.launch { while (isActive) { delay(50); publishMouth(); headPat?.tick(); settings?.tick(); publishSettings() } }
 
     private fun available() = !closed && !failed && context != null && activeScreen && synced &&
         platform.supported && "character_v1" in capabilities
+
+    private fun presentationAllowed() = available() && panelVisible && placement.loaded &&
+        state.status in setOf("rendering", "ready") && sequence.snapshot?.status == "ready"
+
+    fun panelVisible(value: Boolean) {
+        if (closed || panelVisible == value) return
+        panelVisible = value
+        if (!value) headPat?.cancel()
+        publish(state.status, state.errorCode)
+        if (value && available()) display()
+    }
+
+    fun placement(value: CharacterPlacementState) {
+        if (closed) return
+        val becameReady = !placement.loaded && value.loaded
+        placement = value
+        publish(state.status, state.errorCode)
+        if (becameReady && available()) display()
+    }
 
     fun resumed(value: Boolean, changingConfigurations: Boolean = false) {
         if (closed) return
@@ -59,6 +81,7 @@ class CharacterSession(
         } else if (available()) {
             if (currentLoad == null || state.status == "paused" || settings?.view?.busy == true) requestLoad() else display()
         }
+        publish(state.status, state.errorCode)
     }
 
     fun baseState(epoch: String, conversation: String, synchronized: Boolean) {
@@ -72,10 +95,11 @@ class CharacterSession(
         }
         val becameReady = !synced && synchronized
         synced = synchronized
-        if (!synchronized) { sequence.detached(); headPat?.cancel(); settings?.available(false); publishSettings() }
+        if (!synchronized) { headPat?.cancel(); settings?.available(false); publishSettings() }
         if (becameReady && available()) {
             if (currentLoad == null || settings?.view?.busy == true) requestLoad() else display()
         }
+        publish(state.status, state.errorCode)
     }
 
     fun receive(message: ExtensionMessage) {
@@ -88,7 +112,7 @@ class CharacterSession(
             if ("character_controls_v1" in capabilities) {
                 headPat = HeadPatSession(candidate, send = { send(it) }, visual = { value -> render { it.post("head_pat", wire(value)) } }, nowMillis = nowMillis)
                 settings = CharacterSettingsState(candidate, send = { send(it) },
-                    showPreview = { snapshot -> if (available()) render { it.post("preview", snapshot.json) } },
+                    showPreview = { snapshot -> if (presentationAllowed()) render { it.post("preview", snapshot.json) } },
                     requestSnapshot = { if (available()) requestLoad() }, nowMillis = nowMillis)
             }
             if (available()) requestLoad()
@@ -98,12 +122,12 @@ class CharacterSession(
         try { ExtensionCodec.validate(message, current, capabilities, "from_pc") } catch (_: ProtocolException) { return }
         when (message) {
             is CharacterSettingsResult -> { settings?.receive(message); publishSettings() }
-            is HeadPatState -> headPat?.receive(message, available() && state.status == "ready")
+            is HeadPatState -> headPat?.receive(message, presentationAllowed() && state.status == "ready")
             is CharacterChanged -> if (sequence.changed(message.state_revision, message.model_version) && available()) requestLoad()
             is CharacterAction -> {
                 val before = sequence.observedAction
                 when (sequence.action(message)) {
-                    "apply" -> render { it.post("action", wire(message)) }
+                    "apply" -> if (presentationAllowed()) render { it.post("action", wire(message)) }
                     "refresh" -> {
                         runCatching { send(CharacterSnapshotRequest(current.registrationGeneration, current.serverEpoch, current.connectionGeneration)) }
                         if (available()) requestLoad()
@@ -127,7 +151,8 @@ class CharacterSession(
     fun attach(value: CharacterRenderer) {
         if (closed) return
         if (renderer !== value) { headPat?.cancel(); settings?.close() }
-        renderer = value; sequence.detached(); lastMouth = null
+        renderer = value; sequence.detached(); lastMouth = null; lastPresentation = null
+        publish(state.status, state.errorCode)
         if (available()) display()
     }
 
@@ -135,14 +160,14 @@ class CharacterSession(
         if (renderer !== value) return
         settings?.close(); publishSettings()
         headPat?.cancel()
-        renderer = null; sequence.detached(); lastMouth = null
+        renderer = null; sequence.detached(); lastMouth = null; lastPresentation = null
     }
 
     fun event(source: CharacterRenderer, event: CharacterEvent) {
         if (closed || renderer !== source) return
         if (event.type == "head_pat_input") {
             val input = event.input ?: return
-            if (available() && state.status == "ready" && headPat != null) headPat?.input(input)
+            if (presentationAllowed() && state.status == "ready" && headPat != null) headPat?.input(input)
             else render { it.post("head_pat", buildJsonObject {
                 put("model_version", input.modelVersion); put("interaction_id", input.interactionId)
                 put("source", "phone"); put("phase", "rejected")
@@ -156,6 +181,9 @@ class CharacterSession(
                 if (version != sequence.snapshot?.modelVersion || pending || download?.isActive == true) return
                 sequence.rendered(version)
                 publish("ready"); publishMouth(force = true)
+                settings?.view?.takeIf { it.open && presentationAllowed() }?.snapshot?.let { preview ->
+                    render { it.post("preview", preview.json) }
+                }
                 if (missedExpression > (sequence.snapshot?.actionSeq ?: 0)) { missedExpression = 0; requestLoad() }
             }
             "unavailable" -> fail("character_render_failed")
@@ -223,11 +251,12 @@ class CharacterSession(
         if (!available()) return
         val snapshot = sequence.snapshot ?: loaded.snapshot
         publish(if (snapshot.status == "ready") "rendering" else snapshot.status)
+        if (!placement.loaded) return
         render { it.show(snapshot, loaded.character) }
     }
 
     private fun publishMouth(force: Boolean = false) {
-        if (closed || !available()) return
+        if (!presentationAllowed()) return
         val mouth = playback.current(nowMillis())
         if (force || mouth != lastMouth) {
             render { it.post("playback", mouth.json()) }
@@ -237,12 +266,22 @@ class CharacterSession(
 
     private fun publish(status: String, error: String? = null) {
         settings?.available(available() && sequence.snapshot?.status == "ready")
-        val next = state.copy(status = status, errorCode = error,
+        val previous = state
+        state = state.copy(status = status, errorCode = error)
+        val next = state.copy(
+            retainRenderer = !closed && !failed && currentLoad?.snapshot?.status == "ready",
+            presentationAllowed = presentationAllowed(),
             settings = settingsView(status))
-        if (next != state) { state = next; onState(next) }
+        state = next
+        if (next != previous) onState(next)
+        val presentation = placement.placement to next.presentationAllowed
+        if (renderer != null && lastPresentation != presentation) {
+            lastPresentation = presentation
+            render { it.present(presentation.first, presentation.second) }
+        }
         val snapshot = sequence.snapshot
         val enabled = snapshot?.json?.get("settings")?.jsonObject?.get("enable_head_pat")?.jsonPrimitive?.booleanOrNull ?: true
-        headPat?.configure(snapshot?.modelVersion, available() && status == "ready" && enabled)
+        headPat?.configure(snapshot?.modelVersion, presentationAllowed() && status == "ready" && enabled)
     }
 
     private fun settingsView(status: String = state.status): CharacterSettingsViewState {

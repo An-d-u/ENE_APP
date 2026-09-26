@@ -24,9 +24,15 @@ class CharacterBridge(val generation: String = UUID.randomUUID().toString()) : C
 
     fun command(type: String, value: JsonObject): String {
         check(!closed && documentReady) { "character_not_ready" }
-        require(type in setOf("snapshot", "action", "playback", "head_pat", "preview")) { "unknown_command" }
+        require(type in setOf("snapshot", "action", "playback", "head_pat", "preview", "presentation")) { "unknown_command" }
+        if (type == "presentation") {
+            require(value.keys == setOf("placement", "visible")) { "invalid_presentation" }
+            val visible = value["visible"] as? JsonPrimitive
+            require(visible != null && !visible.isString && visible.booleanOrNull != null) { "invalid_presentation" }
+            CharacterPlacementCodec.fromJson(value["placement"] as? JsonObject ?: throw IllegalArgumentException("invalid_presentation"))
+        }
         return buildJsonObject { put("type", type); put("generation", generation); put("value", value) }.toString().also {
-            require(it.toByteArray(Charsets.UTF_8).size <= if (type == "head_pat") 2048 else CharacterSnapshot.MAX_MANIFEST_BYTES + 256) { "character_command_too_large" }
+            require(it.toByteArray(Charsets.UTF_8).size <= if (type in setOf("head_pat", "presentation")) 2048 else CharacterSnapshot.MAX_MANIFEST_BYTES + 256) { "character_command_too_large" }
         }
     }
 

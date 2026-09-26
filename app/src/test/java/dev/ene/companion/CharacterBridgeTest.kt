@@ -7,6 +7,21 @@ import org.junit.Test
 import kotlinx.serialization.json.*
 
 class CharacterBridgeTest {
+    @Test fun presentationIsStrictAndUnavailableBeforeDocumentReadyOrAfterClose() {
+        val bridge = CharacterBridge(generation)
+        val value = dev.ene.companion.character.CharacterPlacement(1.5, 25.0, 75.0).presentation(false)
+        assertThrows(IllegalStateException::class.java) { bridge.command("presentation", value) }
+        bridge.receive(origin, true, "{\"type\":\"bridge_ready\"}")
+        bridge.receive(origin, true, message("document_ready"))
+        assertEquals(value, Json.parseToJsonElement(bridge.command("presentation", value)).jsonObject["value"])
+        for (bad in listOf(JsonObject(value + ("extra" to JsonPrimitive(1))),
+            JsonObject(value + ("visible" to JsonPrimitive("false"))),
+            JsonObject(value + ("placement" to JsonObject(emptyMap()))))) {
+            assertThrows(IllegalArgumentException::class.java) { bridge.command("presentation", bad) }
+        }
+        bridge.close()
+        assertThrows(IllegalStateException::class.java) { bridge.command("presentation", value) }
+    }
     private val generation = "00000000-0000-4000-8000-000000000001"
     private val origin = "https://appassets.androidplatform.net"
     private val model = "a".repeat(64)

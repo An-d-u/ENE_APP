@@ -6,12 +6,14 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.JsonObject
 
 interface CharacterRenderer {
+    fun present(placement: CharacterPlacement, visible: Boolean) = Unit
     fun show(snapshot: CharacterSnapshot, character: CharacterCache.CachedCharacter?)
     fun post(type: String, value: JsonObject)
     fun clear() = Unit
 }
 
 data class CharacterViewState(val status: String = "unavailable", val errorCode: String? = null, val viewGeneration: Long = 0,
+    val retainRenderer: Boolean = false, val presentationAllowed: Boolean = false,
     val settings: CharacterSettingsViewState = CharacterSettingsViewState())
 
 /** 렌더러와 디스크 경계를 시험 대역으로 교체할 수 있다. Application 단위로 한 번 생성한다. */

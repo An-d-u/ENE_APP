@@ -33,8 +33,67 @@ class CharacterSessionTest {
     private open class Renderer : CharacterRenderer {
         val snapshots = mutableListOf<CharacterSnapshot>()
         val commands = mutableListOf<Pair<String, JsonObject>>()
+        val presentations = mutableListOf<Pair<CharacterPlacement, Boolean>>()
+        override fun present(placement: CharacterPlacement, visible: Boolean) { presentations += placement to visible }
         override fun show(snapshot: CharacterSnapshot, character: CharacterCache.CachedCharacter?) { snapshots += snapshot }
         override fun post(type: String, value: JsonObject) { commands += type to value }
+    }
+
+    @Test fun hiddenPanelRetainsModelAndLatestExpressionWithoutReplayingGestures() = runTest {
+        var loads = 0
+        val f = Fixture(this, controls = true) { loads++; result() }
+        val p = CharacterPlacement(1.5, 25.0, 75.0)
+        f.session.placement(CharacterPlacementState(p, loaded = true))
+        f.activate(); advanceTimeBy(300); runCurrent(); f.rendered()
+        assertTrue(f.states.last().retainRenderer)
+        f.session.panelVisible(false)
+        assertFalse(f.renderer.presentations.last().second)
+        assertFalse(f.states.last().presentationAllowed)
+        assertTrue(f.states.last().settings.available)
+        val before = f.renderer.commands.size
+        f.session.receive(f.action(4).copy(kind = "expression", action_id = "normal"))
+        f.session.receive(f.action(5))
+        f.session.localPlayback(CharacterPlayback(1, audioId(1), audioId(2), audioId(3), audioId(4), audioId(6), "phone", 123, .4, true))
+        assertEquals(before, f.renderer.commands.size)
+        f.session.panelVisible(true); f.rendered()
+        assertEquals(4L, f.renderer.snapshots.last().actionSeq)
+        assertEquals(p to true, f.renderer.presentations.last())
+        assertEquals(1, loads)
+        assertTrue(f.sent.none { it is CharacterSettingsPatch || it is AudioStart })
+        assertTrue(f.renderer.commands.none { it.first == "action" })
+        f.session.closeAndJoin(); assertFalse(f.states.last().retainRenderer)
+    }
+
+    @Test fun sameConnectionSyncHidesImmediatelyButRetainsOwnership() = runTest {
+        var loads = 0
+        val f = Fixture(this) { loads++; result() }
+        f.activate(); advanceTimeBy(300); runCurrent(); f.rendered()
+        repeat(3) {
+            f.session.baseState(audioId(1), audioId(3), false)
+            assertTrue(f.states.last().retainRenderer)
+            assertFalse(f.states.last().presentationAllowed)
+            assertFalse(f.renderer.presentations.last().second)
+            f.session.baseState(audioId(1), audioId(3), true); f.rendered()
+        }
+        assertEquals(1, loads)
+        assertTrue(f.renderer.presentations.last().second)
+        f.session.closeAndJoin()
+    }
+
+    @Test fun placementLoadBlocksOnlyRenderingAndLateResultIsAppliedBeforeSnapshot() = runTest {
+        val f = Fixture(this) { result() }
+        f.session.placement(CharacterPlacementState())
+        f.activate(); advanceTimeBy(300); runCurrent()
+        assertEquals(1, f.media.size)
+        assertTrue(f.renderer.snapshots.isEmpty())
+        val p = CharacterPlacement(1.3, 20.0, 80.0)
+        f.session.placement(CharacterPlacementState(p, loaded = true))
+        assertEquals(1, f.renderer.snapshots.size)
+        assertEquals(p, f.renderer.presentations.last().first)
+        f.rendered(); f.session.placement(CharacterPlacementState(p.copy(scale = 1.8), loaded = true))
+        assertEquals(1, f.renderer.snapshots.size)
+        assertEquals(1.8, f.renderer.presentations.last().first.scale, 0.0)
+        f.session.closeAndJoin()
     }
 
     @Test fun rendererFailureStagesArePreservedButUnknownDetailsAreDiscarded() = runTest {

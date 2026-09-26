@@ -41,6 +41,7 @@ class CharacterWebView(
     private var documentReady = false
     private var replyProxy: JavaScriptReplyProxy? = null
     private var pending: CharacterSnapshot? = null
+    private var pendingPresentation: JsonObject? = null
     private val handler = Handler(Looper.getMainLooper())
     private val readinessTimeout = Runnable { if (!documentReady) fail("character_bridge_timeout") }
 
@@ -108,6 +109,7 @@ class CharacterWebView(
                             }
                             if (event.type == "document_ready") {
                                 documentReady = true; handler.removeCallbacks(readinessTimeout)
+                                pendingPresentation?.let { post("presentation", it) }
                                 pending?.let { post("snapshot", it.json) }
                             }
                             onEvent(event)
@@ -127,15 +129,26 @@ class CharacterWebView(
         if (closed || browser == null) return
         require((snapshot.status == "ready") == (character != null)) { "invalid_character_mount" }
         require(character == null || character.snapshot.modelVersion == snapshot.modelVersion) { "stale_character_mount" }
-        val replacement = character?.retain()
         synchronized(resourcesLock) {
-            streams.toList().forEach { runCatching { it.close() } }
-            mount?.close(); mount = replacement
-            policy = CharacterRequestPolicy(snapshot.modelVersion, snapshot.assets.associate { it.id to it.mime })
+            // 같은 불변 자산 묶음의 설정 갱신에서는 읽던 스트림과 뷰 소유 핀을 유지한다.
+            if (mount == null || character == null || mount?.snapshot?.modelVersion != snapshot.modelVersion ||
+                mount?.snapshot?.assets != snapshot.assets) {
+                val replacement = character?.retain()
+                streams.toList().forEach { runCatching { it.close() } }
+                mount?.close(); mount = replacement
+                policy = CharacterRequestPolicy(snapshot.modelVersion, snapshot.assets.associate { it.id to it.mime })
+            }
         }
         pending = snapshot
         bridge.expectModel(snapshot.modelVersion)
         if (documentReady) post("snapshot", snapshot.json)
+    }
+
+    override fun present(placement: CharacterPlacement, visible: Boolean) {
+        mainThread()
+        if (closed) return
+        pendingPresentation = placement.presentation(visible)
+        if (documentReady) post("presentation", pendingPresentation!!)
     }
 
     override fun post(type: String, value: JsonObject) {
@@ -186,7 +199,7 @@ class CharacterWebView(
     override fun close() {
         mainThread()
         if (closed) return
-        closed = true; pending = null; replyProxy = null; bridge.close()
+        closed = true; pending = null; pendingPresentation = null; replyProxy = null; bridge.close()
         handler.removeCallbacks(readinessTimeout)
         synchronized(resourcesLock) {
             streams.toList().forEach { runCatching { it.close() } }

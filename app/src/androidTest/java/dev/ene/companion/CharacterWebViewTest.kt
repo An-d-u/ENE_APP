@@ -5,6 +5,7 @@ import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import dev.ene.companion.character.CharacterWebView
+import dev.ene.companion.character.CharacterPlacement
 import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -19,19 +20,28 @@ class CharacterWebViewTest {
         var view: CharacterWebView? = null
         var failure: String? = null
         var ready = false
+        var presentation: String? = null
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         try {
             instrumentation.runOnMainSync {
                 view = CharacterWebView(ApplicationProvider.getApplicationContext(), { event ->
                     if (event.type == "document_ready") ready = true
-                    if (event.type == "unavailable") completed.countDown()
+                    if (event.type == "unavailable") {
+                        // 시험에서만 내부 상태를 읽는다. 제품의 명령 통로는 WebMessage 허용 목록 그대로다.
+                        view!!.browser!!.evaluateJavascript("JSON.stringify([characterPlacement.scale,characterPlacement.xPercent,characterPlacement.yPercent,characterPresentationVisible])") {
+                            presentation = it; completed.countDown()
+                        }
+                    }
                     if (event.type == "error") { failure = event.code; completed.countDown() }
                 }, { failure = it; completed.countDown() })
+                view!!.present(CharacterPlacement(1.2, 10.0, 90.0), true)
+                view!!.present(CharacterPlacement(1.5, 25.0, 75.0), false)
                 view!!.clear()
             }
             assertTrue("내부 문서의 준비/스냅샷 응답이 필요합니다", completed.await(15, TimeUnit.SECONDS))
             assertNull(failure)
             assertTrue(ready)
+            assertEquals("\"[1.5,25,75,false]\"", presentation)
         } finally { instrumentation.runOnMainSync { view?.close() } }
     }
 
@@ -57,6 +67,7 @@ class CharacterWebViewTest {
                 assertTrue(settings.mediaPlaybackRequiresUserGesture)
             }
             view.close()
+            view.present(CharacterPlacement(2.0), true)
             view.close()
             assertEquals(0, view.childCount)
         }

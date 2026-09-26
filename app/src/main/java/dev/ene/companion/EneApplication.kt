@@ -9,16 +9,21 @@ import dev.ene.companion.storage.ConnectionSettingsStore
 import dev.ene.companion.storage.TokenStore
 import dev.ene.companion.audio.AndroidAudioPlatform
 import dev.ene.companion.character.CharacterPlatform
+import dev.ene.companion.character.CharacterPlacementController
+import dev.ene.companion.storage.CharacterPlacementStore
+import kotlinx.coroutines.*
 
 /** 화면 회전과 별개인 앱 수명의 연결 하나만 유지한다. */
 class EneApplication : Application(), DefaultLifecycleObserver {
+    private val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     lateinit var connection: ConnectionRepository
         private set
 
     override fun onCreate() {
         super<Application>.onCreate()
         connection = ConnectionRepository(TokenStore(this), ConnectionSettingsStore(this),
-            audioPlatform = AndroidAudioPlatform(this), characterPlatform = CharacterPlatform.android(this))
+            audioPlatform = AndroidAudioPlatform(this), characterPlatform = CharacterPlatform.android(this),
+            placementController = CharacterPlacementController(CharacterPlacementStore(this), applicationScope))
         ProcessLifecycleOwner.get().lifecycle.addObserver(this)
     }
     override fun onStart(owner: LifecycleOwner) { connection.foreground(true) }

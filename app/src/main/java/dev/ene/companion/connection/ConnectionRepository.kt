@@ -27,6 +27,7 @@ class ConnectionRepository(
     private val jitter: () -> Double = { kotlin.random.Random.nextDouble() },
     private val audioPlatform: AudioPlatform? = null,
     private val characterPlatform: CharacterPlatform? = null,
+    private val placementController: CharacterPlacementController? = null,
 ) : Closeable {
     private val scope = CoroutineScope(SupervisorJob() + dispatcher)
     private val transition = Mutex()
@@ -34,6 +35,8 @@ class ConnectionRepository(
     val state = mutableState.asStateFlow()
     private val mutableCharacterState = MutableStateFlow(CharacterViewState())
     val characterState = mutableCharacterState.asStateFlow()
+    val characterPlacement = placementController?.state ?: MutableStateFlow(CharacterPlacementState(loaded = true)).asStateFlow()
+    private var characterPanelVisible = true
     private var characterRenderer: CharacterRenderer? = null
     private var characterViewGeneration = 0L
     private var foreground = false
@@ -49,6 +52,18 @@ class ConnectionRepository(
         var characterLocalGeneration = -1L
     }
     private var active: Active? = null
+
+    init {
+        scope.launch { characterPlacement.collect { active?.character?.placement(it) } }
+    }
+    fun characterPanelVisible(value: Boolean) {
+        characterPanelVisible = value
+        active?.character?.panelVisible(value)
+    }
+    fun changeCharacterPlacement(value: CharacterPlacement) { placementController?.change(value) }
+    fun finishCharacterPlacement() { placementController?.finishAdjustment() }
+    fun resetCharacterPlacement() { placementController?.reset() }
+    fun retryCharacterPlacementSave() { placementController?.retrySave() }
 
     /** Activity의 Main 콜백에서 즉시 호출한다. 느린 저장 작업의 mutex 뒤로 미루지 않는다. */
     fun activityResumed(value: Boolean, changingConfigurations: Boolean = false) {
@@ -243,7 +258,11 @@ class ConnectionRepository(
                                     }
                                     mutableCharacterState.value = value.copy(viewGeneration = characterViewGeneration)
                                 } },
-                            ).also { record.character = it; it.resumed(resumedActivity); characterRenderer?.let(it::attach) }
+                            ).also {
+                                record.character = it
+                                it.placement(characterPlacement.value); it.panelVisible(characterPanelVisible)
+                                it.resumed(resumedActivity); characterRenderer?.let(it::attach)
+                            }
                         }
                         if (character == null) mutableCharacterState.value = CharacterViewState("unsupported", viewGeneration = ++characterViewGeneration)
                         val extensions = audioPlatform?.takeIf { "audio_pcm_v1" in ready.capabilities }?.let { platform ->
