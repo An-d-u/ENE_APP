@@ -6,6 +6,8 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.unit.Density
@@ -41,11 +43,23 @@ class CharacterPlacementScreenTest {
             }
         } }
         compose.onNodeWithContentDescription("캐릭터 크기").performScrollTo()
-            .performSemanticsAction(SemanticsActions.SetProgress) { it(150f) }
-        compose.runOnIdle { assertEquals(1.5, state.placement.scale, 0.001); assertTrue(finished > 0) }
+            .performSemanticsAction(SemanticsActions.SetProgress) { it(600f) }
+            .assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "600%"))
+            .assert(SemanticsMatcher.expectValue(SemanticsProperties.ProgressBarRangeInfo, ProgressBarRangeInfo(600f, 50f..600f)))
+        compose.onNodeWithContentDescription("가로 위치").performScrollTo()
+            .performSemanticsAction(SemanticsActions.SetProgress) { it(-300f) }
+            .assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "-300%"))
+            .assert(SemanticsMatcher.expectValue(SemanticsProperties.ProgressBarRangeInfo, ProgressBarRangeInfo(-300f, -300f..400f)))
+        compose.onNodeWithContentDescription("세로 위치").performScrollTo()
+            .performSemanticsAction(SemanticsActions.SetProgress) { it(400f) }
+            .assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "400%"))
+        compose.runOnIdle { assertEquals(CharacterPlacement(6.0, -300.0, 400.0), state.placement); assertTrue(finished >= 3) }
         compose.onNodeWithText("저장 재시도").performScrollTo().performClick()
         compose.onNodeWithText("기본 배치 복원").performScrollTo().performClick()
         compose.onNodeWithText("닫기").performClick()
-        compose.runOnIdle { assertEquals(1, retries); assertEquals(1, resets); assertEquals(1, closes) }
+        compose.runOnIdle {
+            assertEquals(1, retries); assertEquals(1, resets); assertEquals(1, closes)
+            assertEquals(CharacterPlacement(), state.placement)
+        }
     }
 }

@@ -25,12 +25,12 @@ class CharacterPlacementStoreTest {
     @Test fun roundTripAndFailedWritePreserveLastCompleteFile() = inDirectory { context, directory ->
         val store = CharacterPlacementStore(context, directory)
         assertNull(store.load())
-        val value = CharacterPlacement(1.4, 30.0, 70.0)
+        val value = CharacterPlacement(6.0, -300.0, 400.0)
         store.save(value)
         assertEquals(value, CharacterPlacementStore(context, directory).load())
         val pending = File(directory, "placement.json.new")
         check(pending.mkdir()); File(pending, "synthetic").writeText("합성 방해 파일")
-        try { store.save(CharacterPlacement(1.8)); fail("쓰기 실패가 필요합니다") }
+        try { store.save(CharacterPlacement(6.0, 400.0, -300.0)); fail("쓰기 실패가 필요합니다") }
         catch (_: IllegalArgumentException) { }
         assertEquals(value, store.load())
     }

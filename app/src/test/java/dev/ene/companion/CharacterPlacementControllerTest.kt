@@ -44,17 +44,38 @@ class CharacterPlacementControllerTest {
         assertEquals(controller.state.value.placement, restored.state.value.placement)
     }
 
+    @Test fun expandedPlacementRestoresWithoutWritingAndKeepsLatestAdjustment() = runTest {
+        val initial = CharacterPlacement(6.0, -300.0, 400.0)
+        val latest = CharacterPlacement(6.0, 400.0, -300.0)
+        val store = Store().apply { saved = initial }
+        val controller = CharacterPlacementController(store, backgroundScope, StandardTestDispatcher(testScheduler))
+        runCurrent()
+        assertEquals(initial, controller.state.value.placement)
+        controller.finishAdjustment(); runCurrent()
+        assertTrue(store.writes.isEmpty())
+        controller.change(CharacterPlacement(3.0, -150.0, 150.0)); advanceTimeBy(200)
+        controller.change(latest); advanceTimeBy(249); runCurrent()
+        assertTrue(store.writes.isEmpty())
+        controller.finishAdjustment(); runCurrent()
+        assertEquals(listOf(latest), store.writes)
+        val restored = CharacterPlacementController(store, backgroundScope, StandardTestDispatcher(testScheduler))
+        runCurrent()
+        assertEquals(latest, restored.state.value.placement)
+        restored.reset(); runCurrent()
+        assertEquals(CharacterPlacement(), store.saved)
+    }
+
     @Test fun finishingFlushesAndOldCompletionCannotAcknowledgeNewValue() = runTest {
         val store = Store().apply { gate = CompletableDeferred() }
         val controller = CharacterPlacementController(store, backgroundScope, StandardTestDispatcher(testScheduler))
         runCurrent()
         controller.change(CharacterPlacement(1.2)); controller.finishAdjustment(); runCurrent()
-        controller.change(CharacterPlacement(1.7)); controller.finishAdjustment(); runCurrent()
+        controller.change(CharacterPlacement(6.0, 400.0, -300.0)); controller.finishAdjustment(); runCurrent()
         assertEquals(1, store.writes.size)
         assertNotEquals("idle", controller.state.value.saveStatus)
         store.gate!!.complete(Unit); runCurrent()
-        assertEquals(listOf(CharacterPlacement(1.2), CharacterPlacement(1.7)), store.writes)
-        assertEquals(CharacterPlacement(1.7), store.saved)
+        assertEquals(listOf(CharacterPlacement(1.2), CharacterPlacement(6.0, 400.0, -300.0)), store.writes)
+        assertEquals(CharacterPlacement(6.0, 400.0, -300.0), store.saved)
         assertEquals("idle", controller.state.value.saveStatus)
     }
 

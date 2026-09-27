@@ -7,6 +7,22 @@ import org.junit.Test
 import kotlinx.serialization.json.*
 
 class CharacterBridgeTest {
+    @Test fun presentationAcceptsExpandedBoundsButRejectsOutOfRangeNumbers() {
+        val bridge = CharacterBridge(generation)
+        bridge.receive(origin, true, "{\"type\":\"bridge_ready\"}")
+        bridge.receive(origin, true, message("document_ready"))
+        for ((x, y) in listOf(-300 to 400, 400 to -300)) {
+            val value = Json.parseToJsonElement("""{"visible":true,"placement":{"scale":6,"xPercent":$x,"yPercent":$y}}""").jsonObject
+            assertEquals(value, Json.parseToJsonElement(bridge.command("presentation", value)).jsonObject["value"])
+            val placement = value.getValue("placement").jsonObject
+            for ((key, number) in listOf("scale" to .49, "scale" to 6.01, "xPercent" to -300.01,
+                "xPercent" to 400.01, "yPercent" to -300.01, "yPercent" to 400.01)) {
+                val bad = JsonObject(value + ("placement" to JsonObject(placement + (key to JsonPrimitive(number)))))
+                assertThrows(IllegalArgumentException::class.java) { bridge.command("presentation", bad) }
+            }
+        }
+    }
+
     @Test fun presentationIsStrictAndUnavailableBeforeDocumentReadyOrAfterClose() {
         val bridge = CharacterBridge(generation)
         val value = dev.ene.companion.character.CharacterPlacement(1.5, 25.0, 75.0).presentation(false)
