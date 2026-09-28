@@ -38,6 +38,10 @@ class StoragePolicyTest {
         assertTrue(manifest.contains("android:dataExtractionRules=\"@xml/data_extraction_rules\""))
         assertTrue(manifest.contains("android:networkSecurityConfig=\"@xml/network_security_config\""))
         assertTrue(manifest.contains("android.permission.CAMERA"))
+        assertTrue(manifest.contains("android.permission.CHANGE_WIFI_MULTICAST_STATE"))
+        assertFalse(manifest.contains("android.permission.ACCESS_LOCAL_NETWORK"))
+        assertFalse(manifest.contains("android.permission.ACCESS_FINE_LOCATION"))
+        assertFalse(manifest.contains("android.permission.ACCESS_COARSE_LOCATION"))
     }
 
     @Test fun bothBackupPoliciesExcludeAllAppStorageDomains() {
