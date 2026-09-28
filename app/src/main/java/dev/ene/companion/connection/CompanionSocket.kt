@@ -205,6 +205,15 @@ class OkHttpTransport(private val trust: TrustedServer) : ConnectionTransport, C
             return source.buffer.readByteArray().decodeToString(throwOnInvalidSequence = true)
         }
 
+        private fun infoFailure(error: Throwable): Throwable = when (error) {
+            is CancellationException -> error
+            is ConnectionException -> error
+            // 잘못된 UTF-8도 IOException 하위 타입이지만 전송 단절과는 구분한다.
+            is java.nio.charset.CharacterCodingException -> ConnectionException("invalid_server_info")
+            is IOException -> ConnectionException(transportFailure(error))
+            else -> ConnectionException("invalid_server_info")
+        }
+
         private fun handshakeFailure(response: Response?, expectedServerId: String): String {
             if (response == null) return "pc_unreachable"
             if (response.code != 401) return "unexpected_server"
@@ -238,7 +247,7 @@ class OkHttpTransport(private val trust: TrustedServer) : ConnectionTransport, C
                 }
                 if (!continuation.isActive) return
                 result.fold(continuation::resume, { error ->
-                    continuation.resumeWithException(ConnectionException((error as? ConnectionException)?.code ?: "invalid_server_info"))
+                    continuation.resumeWithException(infoFailure(error))
                 })
             }
         })

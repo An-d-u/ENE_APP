@@ -7,6 +7,9 @@ import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.delay
 import mockwebserver3.MockResponse
 import mockwebserver3.MockWebServer
+import mockwebserver3.SocketEffect
+import okhttp3.Protocol
+import okio.Buffer
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
@@ -17,6 +20,48 @@ import org.junit.Test
 class TlsTransportTest {
     private val id = TlsTestCertificates.SERVER_ID
     private fun credentials() = java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(ByteArray(32).also { java.security.SecureRandom().nextBytes(it) })
+
+    @Test fun interruptedInfoBodyRemainsRetryable() = runBlocking {
+        val ca = TlsTestCertificates.ca()
+        val trusted = TrustedServer.parse(id, TlsTestCertificates.encoded(ca.certificate))
+        MockWebServer().use { server ->
+            server.protocols = listOf(Protocol.HTTP_1_1)
+            server.useHttps(HandshakeCertificates.Builder().heldCertificate(TlsTestCertificates.leaf(ca)).build().sslSocketFactory())
+            server.start()
+            server.enqueue(MockResponse.Builder().body("""{"server_id":"$id","protocol_versions":[1]}""")
+                .onResponseBody(SocketEffect.CloseSocket()).build())
+            OkHttpTransport(trusted).use { transport ->
+                val error = runCatching { withTimeout(5000) { transport.info(Endpoint.parse("127.0.0.1", server.port)) } }.exceptionOrNull()
+                assertTrue(error is ConnectionException)
+                assertEquals("pc_unreachable", (error as ConnectionException).code)
+                assertEquals(1, server.requestCount)
+                assertNull(requireNotNull(server.takeRequest(1, java.util.concurrent.TimeUnit.SECONDS)).headers["Authorization"])
+            }
+        }
+    }
+
+    @Test fun fullyReceivedInvalidInfoIsNotAConnectionFailure() = runBlocking {
+        val ca = TlsTestCertificates.ca()
+        val trusted = TrustedServer.parse(id, TlsTestCertificates.encoded(ca.certificate))
+        val cases = listOf(
+            "{".toByteArray() to "invalid_server_info",
+            byteArrayOf(0xc3.toByte(), 0x28) to "invalid_server_info",
+            ByteArray(8193) { ' '.code.toByte() } to "invalid_server_info",
+            """{"server_id":"00000000-0000-4000-8000-000000000099","protocol_versions":[1]}""".toByteArray() to "server_mismatch",
+        )
+        MockWebServer().use { server ->
+            server.useHttps(HandshakeCertificates.Builder().heldCertificate(TlsTestCertificates.leaf(ca)).build().sslSocketFactory())
+            server.start()
+            for ((bytes, code) in cases) {
+                server.enqueue(MockResponse.Builder().body(Buffer().write(bytes)).build())
+                OkHttpTransport(trusted).use { transport ->
+                    val error = runCatching { transport.info(Endpoint.parse("127.0.0.1", server.port)) }.exceptionOrNull()
+                    assertTrue(error is ConnectionException)
+                    assertEquals(code, (error as ConnectionException).code)
+                }
+            }
+        }
+    }
 
     @Test fun socketRemovedBetweenSizeAndIterationCannotAbortTransportCleanup() {
         val ca = TlsTestCertificates.ca()
