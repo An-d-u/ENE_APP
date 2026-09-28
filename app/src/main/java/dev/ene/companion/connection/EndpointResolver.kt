@@ -64,14 +64,18 @@ fun interface InfoProbe {
 }
 
 class EndpointResolver(private val probe: InfoProbe) {
+    suspend fun verify(serverId: String, endpoint: Endpoint) {
+        val info = withTimeout(3000) { probe.info(endpoint) }
+        if (info.serverId != serverId) throw ConnectionException("server_mismatch")
+        if (1 !in info.versions) throw ConnectionException("unsupported_version", peerAuthenticated = true)
+    }
+
     suspend fun resolve(serverId: String, candidates: List<Endpoint>): Endpoint {
         if (candidates.size !in 1..8) throw ConnectionException("invalid_endpoint")
         var failure = "pc_unreachable"
         for (endpoint in candidates.distinct()) {
             try {
-                val info = withTimeout(3000) { probe.info(endpoint) }
-                if (info.serverId != serverId) { failure = "server_mismatch"; continue }
-                if (1 !in info.versions) { failure = "unsupported_version"; continue }
+                verify(serverId, endpoint)
                 return endpoint
             } catch (_: TimeoutCancellationException) {
                 currentCoroutineContext().ensureActive()

@@ -225,118 +225,31 @@ class ConnectionRepository(
                 val profile = withContext(ioDispatcher) { profiles.load() }
                 if (profile == null || profile.serverId != credentials.serverId) throw ConnectionException("invalid_connection_settings")
                 show(if (retry) ConnectionPhase.RECONNECTING else ConnectionPhase.CONNECTING)
-                transportFactory(credentials.trustedServer(wallClock)).use { transport ->
-                    val endpoint = EndpointResolver(transport).resolve(credentials.serverId, profile.addresses)
-                    val socket = transport.open(endpoint, credentials.serverId, credentials.token, pairing = false)
-                    try {
-                        val requested = buildList {
-                            if (audioPlatform != null && transport.supportsAudio) add("audio_pcm_v1")
-                            if (characterPlatform?.supported == true && transport.supportsCharacter) {
-                                add("character_v1"); add("character_controls_v1")
-                            }
-                        }
-                        val ready = withTimeout(5000) {
-                            if (!socket.send(Hello(requested))) throw ConnectionException("connection_closed")
-                            ProtocolCodec.decode(socket.receive()) as? Ready ?: throw ConnectionException("invalid_server_info")
-                        }
-                        if (ready.server_id != credentials.serverId || ready.registration_generation != credentials.generation) throw ConnectionException("registration_changed")
-                        if (ready.capabilities.any { it !in requested }) throw ConnectionException("invalid_server_info")
-                        mutableState.value = mutableState.value.copy(phase = ConnectionPhase.SYNCING, endpoint = endpoint, errorCode = null,
-                            audioOutput = AudioOutputStatus(reason = if ("audio_pcm_v1" in ready.capabilities) "syncing" else "audio_not_negotiated"))
-                        val session = ConversationSession(ready, nowMillis)
-                        val record = Active(credentials, session, socket)
-                        active = record
-                        val character = characterPlatform?.takeIf { "character_v1" in ready.capabilities }?.let { platform ->
-                            CharacterSession(ready, CharacterRepository.identity(credentials), CoroutineScope(currentCoroutineContext()), platform,
-                                mediaFactory = { context, current -> transport.character(credentials.token, context) { record.mediaCurrent.get() && current() } },
-                                send = socket::send, nowMillis = nowMillis,
-                                isPublicAssistant = { id -> mutableState.value.messages.any { it.id == id && it.role == "assistant" } },
-                                onState = { value -> if (active === record) {
-                                    if (record.characterLocalGeneration != value.viewGeneration) {
-                                        record.characterLocalGeneration = value.viewGeneration
-                                        characterViewGeneration++
-                                    }
-                                    mutableCharacterState.value = value.copy(viewGeneration = characterViewGeneration)
-                                } },
-                            ).also {
-                                record.character = it
-                                it.placement(characterPlacement.value); it.panelVisible(characterPanelVisible)
-                                it.resumed(resumedActivity); characterRenderer?.let(it::attach)
-                            }
-                        }
-                        if (character == null) mutableCharacterState.value = CharacterViewState("unsupported", viewGeneration = ++characterViewGeneration)
-                        val extensions = audioPlatform?.takeIf { "audio_pcm_v1" in ready.capabilities }?.let { platform ->
-                            ExtensionSession(ready, CoroutineScope(currentCoroutineContext()),
-                                mediaFactory = { context -> transport.audio(credentials.token, context, record.mediaCurrent::get) },
-                                platform = platform, send = socket::send, nowMillis = nowMillis,
-                                isPublicAssistant = { id -> mutableState.value.messages.any { it.id == id && it.role == "assistant" } },
-                                onOutput = { output -> if (active === record) mutableState.value = mutableState.value.copy(audioOutput = output) },
-                                onFailure = { socket.cancel() },
-                                extraCapabilities = ready.capabilities.toSet() - "audio_pcm_v1",
-                                onPlayback = { character?.localPlayback(it) },
-                            ).also { record.extensions = it; it.resumed(resumedActivity) }
-                        }
-                        var pendingSyncHeaders = 0
-                        var headerEpoch = ready.server_epoch
-                        var headerConversation = ready.conversation_id
-                        if (!socket.send(drafts.syncRequest(credentials, session))) throw ConnectionException("connection_closed")
-                        publishDraft()
-                        exchangeSession(socket, nowMillis, {
-                            session.checkTimeout()
-                            val current = requireNotNull(active)
-                            if (!session.syncing && drafts.awaitingResult) {
-                                val deadline = current.responseDeadline ?: (nowMillis() + 10_000).also { current.responseDeadline = it }
-                                if (nowMillis() >= deadline) throw ConnectionException("request_status_timeout")
-                            } else current.responseDeadline = null
-                        }, onExtension = { extensions?.receive(it); character?.receive(it) }, onBaseHeader = { header ->
-                            when (header) {
-                                is ResyncRequired -> { headerEpoch = header.server_epoch; headerConversation = header.conversation_id; pendingSyncHeaders++ }
-                                is SnapshotBegin -> { headerEpoch = header.server_epoch; headerConversation = header.conversation_id; pendingSyncHeaders++ }
-                                else -> Unit
-                            }
-                            if (pendingSyncHeaders > 0) {
-                                extensions?.baseState(headerEpoch, headerConversation, false)
-                                character?.baseState(headerEpoch, headerConversation, false)
-                            }
-                        }, onClosed = {
-                            record.mediaCurrent.set(false)
-                            extensions?.shutdown()
-                            character?.shutdown()
-                        }) { frame ->
-                            if (frame is ErrorMessage) throw ConnectionException(frame.code)
-                            val needsSync = withContext(decodeDispatcher) { session.consume(frame) }
-                            if (frame is ResyncRequired || frame is SnapshotBegin) pendingSyncHeaders--
-                            if (needsSync && !socket.send(drafts.syncRequest(credentials, session))) throw ConnectionException("connection_closed")
-                            if (frame is RequestStatus) drafts.status(frame)
-                            if (session.syncing) show(ConnectionPhase.SYNCING)
-                            else session.snapshot?.let { snapshot ->
-                                mutableState.value = mutableState.value.copy(phase = ConnectionPhase.CONNECTED,
-                                    messages = snapshot.messages, processing = snapshot.processing, errorCode = null)
-                                drafts.synchronized(snapshot)?.let {
-                                    active?.responseDeadline = nowMillis() + 10_000
-                                    if (!socket.send(it)) throw ConnectionException("connection_closed")
-                                }
+                val trust = credentials.trustedServer(wallClock)
+                transportFactory(trust).use { transport ->
+                    val failures = mutableListOf<ConnectionException>()
+                    for (endpoint in profile.addresses.distinct()) {
+                        trust.validate()
+                        var synchronized = false
+                        try {
+                            EndpointResolver(transport).verify(credentials.serverId, endpoint)
+                            runCandidate(credentials, transport, endpoint) {
+                                synchronized = true
                                 backoff.reset()
                             }
-                            if (pendingSyncHeaders > 0) {
-                                extensions?.baseState(headerEpoch, headerConversation, false)
-                                character?.baseState(headerEpoch, headerConversation, false)
-                            } else {
-                                extensions?.baseState(session.serverEpoch, session.conversationId, !session.syncing)
-                                character?.baseState(session.serverEpoch, session.conversationId, !session.syncing)
-                            }
-                            publishDraft()
+                            throw ConnectionException("connection_closed")
+                        } catch (error: TimeoutCancellationException) {
+                            currentCoroutineContext().ensureActive()
+                            trust.validate()
+                            if (synchronized) throw ConnectionException("pc_unreachable")
+                            failures.add(ConnectionException("pc_unreachable"))
+                        } catch (error: ConnectionException) {
+                            trust.validate()
+                            if (synchronized || error.code == "authorization_revoked" && error.peerAuthenticated) throw error
+                            failures.add(error)
                         }
-                    } finally {
-                        val closing = active
-                        closing?.mediaCurrent?.set(false)
-                        closing?.extensions?.shutdown()
-                        closing?.character?.shutdown()
-                        closing?.extensions?.closeAndJoin()
-                        closing?.character?.closeAndJoin()
-                        if (active === closing) active = null
-                        socket.cancel()
                     }
+                    throw candidateFailure(failures)
                 }
             } catch (error: TimeoutCancellationException) {
                 currentCoroutineContext().ensureActive()
@@ -344,7 +257,7 @@ class ConnectionRepository(
             } catch (error: CancellationException) { throw error }
             catch (error: Exception) {
                 val code = failureCode(error)
-                if (code == "authorization_revoked") {
+                if (code == "authorization_revoked" && error is ConnectionException && error.peerAuthenticated) {
                     drafts = DraftOutbox()
                     mutableState.value = ConnectionViewState(errorCode = code)
                     try {
@@ -355,11 +268,133 @@ class ConnectionRepository(
                     catch (failure: Exception) { show(ConnectionPhase.ACTION_REQUIRED, failureCode(failure)) }
                     return
                 }
-                if (code !in RETRYABLE) { show(ConnectionPhase.ACTION_REQUIRED, code); return }
+                if (code !in RETRYABLE_CONNECTION_CODES) { show(ConnectionPhase.ACTION_REQUIRED, code); return }
                 show(ConnectionPhase.RECONNECTING, code)
             }
             retry = true
             delay(backoff.nextMillis())
+        }
+    }
+
+    private suspend fun runCandidate(
+        credentials: DeviceCredentials,
+        transport: ConnectionTransport,
+        endpoint: Endpoint,
+        onSynchronized: suspend () -> Unit,
+    ) {
+        val socket = transport.open(endpoint, credentials.serverId, credentials.token, pairing = false)
+        try {
+            val requested = buildList {
+                if (audioPlatform != null && transport.supportsAudio) add("audio_pcm_v1")
+                if (characterPlatform?.supported == true && transport.supportsCharacter) {
+                    add("character_v1"); add("character_controls_v1")
+                }
+            }
+            val ready = withTimeout(5000) {
+                if (!socket.send(Hello(requested))) throw ConnectionException("connection_closed")
+                ProtocolCodec.decode(socket.receive()) as? Ready ?: throw ConnectionException("invalid_server_info")
+            }
+            if (ready.server_id != credentials.serverId || ready.registration_generation != credentials.generation) throw ConnectionException("registration_changed")
+            if (ready.capabilities.any { it !in requested }) throw ConnectionException("invalid_server_info")
+            mutableState.value = mutableState.value.copy(phase = ConnectionPhase.SYNCING, endpoint = endpoint, errorCode = null,
+                audioOutput = AudioOutputStatus(reason = if ("audio_pcm_v1" in ready.capabilities) "syncing" else "audio_not_negotiated"))
+            val session = ConversationSession(ready, nowMillis)
+            val record = Active(credentials, session, socket)
+            active = record
+            val character = characterPlatform?.takeIf { "character_v1" in ready.capabilities }?.let { platform ->
+                CharacterSession(ready, CharacterRepository.identity(credentials), CoroutineScope(currentCoroutineContext()), platform,
+                    mediaFactory = { context, current -> transport.character(credentials.token, context) { record.mediaCurrent.get() && current() } },
+                    send = socket::send, nowMillis = nowMillis,
+                    isPublicAssistant = { id -> mutableState.value.messages.any { it.id == id && it.role == "assistant" } },
+                    onState = { value -> if (active === record) {
+                        if (record.characterLocalGeneration != value.viewGeneration) {
+                            record.characterLocalGeneration = value.viewGeneration
+                            characterViewGeneration++
+                        }
+                        mutableCharacterState.value = value.copy(viewGeneration = characterViewGeneration)
+                    } },
+                ).also {
+                    record.character = it
+                    it.placement(characterPlacement.value); it.panelVisible(characterPanelVisible)
+                    it.resumed(resumedActivity); characterRenderer?.let(it::attach)
+                }
+            }
+            if (character == null) mutableCharacterState.value = CharacterViewState("unsupported", viewGeneration = ++characterViewGeneration)
+            val extensions = audioPlatform?.takeIf { "audio_pcm_v1" in ready.capabilities }?.let { platform ->
+                ExtensionSession(ready, CoroutineScope(currentCoroutineContext()),
+                    mediaFactory = { context -> transport.audio(credentials.token, context, record.mediaCurrent::get) },
+                    platform = platform, send = socket::send, nowMillis = nowMillis,
+                    isPublicAssistant = { id -> mutableState.value.messages.any { it.id == id && it.role == "assistant" } },
+                    onOutput = { output -> if (active === record) mutableState.value = mutableState.value.copy(audioOutput = output) },
+                    onFailure = { socket.cancel() },
+                    extraCapabilities = ready.capabilities.toSet() - "audio_pcm_v1",
+                    onPlayback = { character?.localPlayback(it) },
+                ).also { record.extensions = it; it.resumed(resumedActivity) }
+            }
+            var pendingSyncHeaders = 0
+            var headerEpoch = ready.server_epoch
+            var headerConversation = ready.conversation_id
+            if (!socket.send(drafts.syncRequest(credentials, session))) throw ConnectionException("connection_closed")
+            publishDraft()
+            exchangeSession(socket, nowMillis, {
+                session.checkTimeout()
+                val current = requireNotNull(active)
+                if (!session.syncing && drafts.awaitingResult) {
+                    val deadline = current.responseDeadline ?: (nowMillis() + 10_000).also { current.responseDeadline = it }
+                    if (nowMillis() >= deadline) throw ConnectionException("request_status_timeout")
+                } else current.responseDeadline = null
+            }, onExtension = { extensions?.receive(it); character?.receive(it) }, onBaseHeader = { header ->
+                when (header) {
+                    is ResyncRequired -> { headerEpoch = header.server_epoch; headerConversation = header.conversation_id; pendingSyncHeaders++ }
+                    is SnapshotBegin -> { headerEpoch = header.server_epoch; headerConversation = header.conversation_id; pendingSyncHeaders++ }
+                    else -> Unit
+                }
+                if (pendingSyncHeaders > 0) {
+                    extensions?.baseState(headerEpoch, headerConversation, false)
+                    character?.baseState(headerEpoch, headerConversation, false)
+                }
+            }, onClosed = {
+                record.mediaCurrent.set(false)
+                extensions?.shutdown()
+                character?.shutdown()
+            }) { frame ->
+                if (frame is ErrorMessage) throw ConnectionException(frame.code)
+                val needsSync = withContext(decodeDispatcher) { session.consume(frame) }
+                if (frame is ResyncRequired || frame is SnapshotBegin) pendingSyncHeaders--
+                if (needsSync && !socket.send(drafts.syncRequest(credentials, session))) throw ConnectionException("connection_closed")
+                if (frame is RequestStatus) drafts.status(frame)
+                if (session.syncing) show(ConnectionPhase.SYNCING)
+                else session.snapshot?.let { snapshot ->
+                    mutableState.value = mutableState.value.copy(phase = ConnectionPhase.CONNECTED,
+                        messages = snapshot.messages, processing = snapshot.processing, errorCode = null)
+                    drafts.synchronized(snapshot)?.let {
+                        active?.responseDeadline = nowMillis() + 10_000
+                        if (!socket.send(it)) throw ConnectionException("connection_closed")
+                    }
+                    onSynchronized()
+                }
+                if (pendingSyncHeaders > 0) {
+                    extensions?.baseState(headerEpoch, headerConversation, false)
+                    character?.baseState(headerEpoch, headerConversation, false)
+                } else {
+                    extensions?.baseState(session.serverEpoch, session.conversationId, !session.syncing)
+                    character?.baseState(session.serverEpoch, session.conversationId, !session.syncing)
+                }
+                publishDraft()
+            }
+        } catch (error: ConnectionException) {
+            throw authenticatedSessionFailure(error.code)
+        } catch (error: ProtocolException) {
+            throw authenticatedSessionFailure(error.code)
+        } finally {
+            val closing = active
+            closing?.mediaCurrent?.set(false)
+            closing?.extensions?.shutdown()
+            closing?.character?.shutdown()
+            closing?.extensions?.closeAndJoin()
+            closing?.character?.closeAndJoin()
+            if (active === closing) active = null
+            socket.cancel()
         }
     }
 
@@ -390,7 +425,6 @@ class ConnectionRepository(
     }
 
     companion object {
-        private val RETRYABLE = setOf("pc_unreachable", "connection_closed", "heartbeat_timeout", "slow_consumer", "snapshot_timeout", "invalid_snapshot", "request_status_timeout", "sync_required")
         internal fun failureCode(error: Exception): String = when (error) {
             is ConnectionException -> error.code
             is ProtocolException -> error.code

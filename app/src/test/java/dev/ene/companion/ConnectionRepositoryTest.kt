@@ -78,7 +78,8 @@ class ConnectionRepositoryTest {
         fun offer(message: WireMessage) { check(incoming.trySend(ProtocolCodec.encode(message)).isSuccess) }
     }
     class Transport : ConnectionTransport, Closeable {
-        val socket = Socket()
+        var socket = Socket()
+            private set
         val probed = mutableListOf<Endpoint>()
         val opened = mutableListOf<Pair<Endpoint, String?>>()
         var firstCandidateFails = false
@@ -92,7 +93,8 @@ class ConnectionRepositoryTest {
         }
         override suspend fun open(endpoint: Endpoint, expectedServerId: String, token: String?, pairing: Boolean): CompanionSocket {
             opened.add(endpoint to token)
-            failure?.let { throw ConnectionException(it) }
+            failure?.let { throw ConnectionException(it, peerAuthenticated = it.startsWith("authorization_")) }
+            if (socket.cancelled) socket = Socket()
             if (!pairing) socket.offer(Ready(serverId, readyEpoch, conversation, 1))
             return socket
         }
@@ -303,7 +305,8 @@ class ConnectionRepositoryTest {
     @Test fun missingSnapshotBeginTimesOutWithoutErasingRegistration() = runTest {
         val registrations = Registrations(credentials())
         val transport = Transport()
-        val repo = repository(registrations) { transport }
+        val profiles = Profiles().apply { value = value!!.copy(addresses = value!!.addresses.take(1)) }
+        val repo = repository(registrations, profiles) { transport }
         try {
             repo.foreground(true); runCurrent(); advanceTimeBy(10_000); runCurrent()
             assertEquals("snapshot_timeout", repo.state.value.errorCode)

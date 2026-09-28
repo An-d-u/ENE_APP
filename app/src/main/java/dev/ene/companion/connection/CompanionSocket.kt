@@ -235,9 +235,11 @@ class OkHttpTransport(private val trust: TrustedServer) : ConnectionTransport, C
             }
 
             override fun onResponse(call: Call, response: Response) {
+                var authenticated = false
                 val result = runCatching {
                     response.use {
                         tls.validate()
+                        authenticated = true
                         if (it.code != 200) throw ConnectionException("unexpected_server")
                         ServerInfo.parse(boundedBody(it)).also { info ->
                             tls.validate()
@@ -247,7 +249,10 @@ class OkHttpTransport(private val trust: TrustedServer) : ConnectionTransport, C
                 }
                 if (!continuation.isActive) return
                 result.fold(continuation::resume, { error ->
-                    continuation.resumeWithException(infoFailure(error))
+                    val failure = infoFailure(error)
+                    continuation.resumeWithException(if (failure is ConnectionException && authenticated && failure.code !in TLS_FAILURE_CODES) {
+                        ConnectionException(failure.code, peerAuthenticated = true)
+                    } else failure)
                 })
             }
         })
@@ -298,7 +303,9 @@ class OkHttpTransport(private val trust: TrustedServer) : ConnectionTransport, C
                         if (response == null) transportFailure(t) else handshakeFailure(response, expectedServerId)
                     } catch (error: ConnectionException) { error.code } finally { response?.close() }
                     socket.inbox.fail(code)
-                    if (opened.compareAndSet(false, true) && continuation.isActive) continuation.resumeWithException(ConnectionException(code))
+                    if (opened.compareAndSet(false, true) && continuation.isActive) {
+                        continuation.resumeWithException(ConnectionException(code, peerAuthenticated = response != null && code !in TLS_FAILURE_CODES))
+                    }
                 }
             })
             socket.attach(native)
