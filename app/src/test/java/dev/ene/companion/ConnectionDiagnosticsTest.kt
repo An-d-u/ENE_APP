@@ -1,6 +1,7 @@
 package dev.ene.companion
 
 import dev.ene.companion.connection.*
+import dev.ene.companion.ui.*
 import org.junit.Assert.*
 import org.junit.Test
 
@@ -32,5 +33,15 @@ class ConnectionDiagnosticsTest {
         val connected = failed.copy(stage = ConnectionStage.RETRY_WAIT).copy(stage = ConnectionStage.CONNECTED)
         assertEquals(failed.lastFailure, connected.lastFailure)
         assertEquals("connection_settings_save_failed", connected.storageNotice)
+    }
+
+    @Test fun displayedDiagnosticsDistinguishDiscoveryStorageAndUnknownExits() {
+        assertEquals("PC 주소를 찾고 있습니다", connectionStageDescription(ConnectionStage.DISCOVERY))
+        assertTrue(discoveryDescription("discovery_no_wifi").contains("Wi-Fi"))
+        assertTrue(discoveryDescription("discovery_no_candidates").contains("주소 수정"))
+        assertTrue(storageNoticeDescription().contains("현재 연결은 유지"))
+        assertNotEquals(previousExitDescription(PreviousExit(ExitRecordStatus.EMPTY)), previousExitDescription(PreviousExit(ExitRecordStatus.UNSUPPORTED)))
+        assertTrue(previousExitDescription(PreviousExit(ExitRecordStatus.AVAILABLE, 999, 100)).contains("알 수 없는"))
+        assertFalse(errorDescription("synthetic private payload").contains("synthetic private payload"))
     }
 }

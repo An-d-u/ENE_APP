@@ -107,7 +107,8 @@ internal class BoundedPcDiscovery(private val backend: DiscoveryBackend, private
                 catch (_: Exception) { notice = "discovery_stop_failed" }
             }
             if (!isCurrent(network) || notice == "discovery_network_changed") return DiscoveryResult(notice = "discovery_network_changed")
-            return DiscoveryResult(found.values.flatten().distinct().take(8), network, notice)
+            val endpoints = found.values.flatten().distinct().take(8)
+            return DiscoveryResult(endpoints, network, notice ?: if (endpoints.isEmpty()) "discovery_no_candidates" else null)
         } finally { running.unlock() }
     }
 }

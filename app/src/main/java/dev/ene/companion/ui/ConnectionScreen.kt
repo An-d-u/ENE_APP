@@ -35,6 +35,7 @@ fun ConnectionScreen(repository: ConnectionRepository) {
                     host = state.endpoint?.host.orEmpty(); port = (state.endpoint?.port ?: 8765).toString(); dialog = "address"
                 }, modifier = Modifier.heightIn(min = 48.dp)) { Text("주소 수정") }
                 TextButton(onClick = { dialog = "forget" }, modifier = Modifier.heightIn(min = 48.dp)) { Text("등록 해제") }
+                TextButton(onClick = { dialog = "diagnostics" }, modifier = Modifier.heightIn(min = 48.dp)) { Text("연결 진단") }
             }
             if (state.phase == ConnectionPhase.AWAITING_APPROVAL) {
                 TextButton(onClick = { repository.cancelPairing() }, modifier = Modifier.heightIn(min = 48.dp)) { Text("승인 대기 취소") }
@@ -70,6 +71,7 @@ fun ConnectionScreen(repository: ConnectionRepository) {
         }
     }
     when (dialog) {
+        "diagnostics" -> ConnectionDiagnosticsDialog(state.diagnostics) { dialog = null }
         "pair" -> AlertDialog(onDismissRequest = { dialog = null }, title = { Text("새 QR로 연결할까요?") },
             text = { Text("새 연결에는 PC 승인이 필요합니다. 승인될 때까지 기존 등록은 보관됩니다.") },
             confirmButton = { TextButton(onClick = { dialog = null; camera = true }) { Text("QR 스캔") } },
@@ -103,6 +105,9 @@ fun ConnectionStatus(state: ConnectionViewState) {
             ConnectionPhase.ACTION_REQUIRED -> "연결을 확인해 주세요"
         }, style = MaterialTheme.typography.titleSmall)
         if (state.phase == ConnectionPhase.CONNECTED) Text(audioOutputDescription(state.audioOutput), style = MaterialTheme.typography.bodySmall)
+        if (state.diagnostics.stage !in setOf(ConnectionStage.IDLE, ConnectionStage.CONNECTED)) Text(connectionStageDescription(state.diagnostics.stage), style = MaterialTheme.typography.bodySmall)
+        if (state.phase != ConnectionPhase.CONNECTED) state.diagnostics.discoveryNotice?.let { Text(discoveryDescription(it), style = MaterialTheme.typography.bodySmall) }
+        state.diagnostics.storageNotice?.let { Text(storageNoticeDescription(), style = MaterialTheme.typography.bodySmall) }
         state.errorCode?.let { Text(errorDescription(it), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
         if (state.messages.isNotEmpty() && state.phase != ConnectionPhase.CONNECTED) Text("마지막으로 받은 대화입니다. 동기화가 끝나면 갱신됩니다.", style = MaterialTheme.typography.bodySmall)
     }
@@ -119,5 +124,5 @@ internal fun errorDescription(code: String): String = when (code) {
     "snapshot_too_large" -> "현재 대화가 모바일 전송 한도를 넘었습니다. PC에서 확인해 주세요."
     "conversation_changed" -> "PC 실행이나 대화가 바뀌어 자동 재전송하지 않았습니다. 대화를 확인한 뒤 직접 전송해 주세요."
     "pc_unreachable", "heartbeat_timeout", "connection_closed", "snapshot_timeout", "request_status_timeout" -> "PC ENE 실행 상태와 같은 Wi-Fi 연결 여부를 확인해 주세요."
-    else -> "작업을 마치지 못했습니다. 입력·주소·PC 상태를 확인해 주세요. ($code)"
+    else -> "작업을 마치지 못했습니다. 입력·주소·PC 상태를 확인해 주세요. (${diagnosticCode(code)})"
 }
