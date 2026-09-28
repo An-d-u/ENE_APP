@@ -18,6 +18,8 @@ object NoPcDiscovery : PcDiscovery {
 }
 
 internal class DiscoveryFailure(val code: String) : Exception(code)
+// API 33의 구형 확장 버전도 포함한다. 전경의 제한된 탐색 동안만 획득한다.
+internal fun needsDiscoveryMulticastLock(sdk: Int): Boolean = sdk < 34
 internal data class ResolvedService(val addresses: List<String>, val port: Int, val attributes: Map<String, String>)
 internal interface DiscoveryService {
     val key: String
@@ -84,7 +86,7 @@ internal class BoundedPcDiscovery(private val backend: DiscoveryBackend, private
                         when (val event = events.receive()) {
                             DiscoveryEvent.NetworkChanged -> { notice = "discovery_network_changed"; break }
                             is DiscoveryEvent.Failed -> { notice = event.code; break }
-                            is DiscoveryEvent.Lost -> { found.remove(event.key); seen.remove(event.key) }
+                            is DiscoveryEvent.Lost -> found.remove(event.key)
                             is DiscoveryEvent.Found -> {
                                 val service = event.service
                                 if (service.type.trimEnd('.') != "_ene-companion._tcp" || service.key.length !in 1..256 || service.key in seen || seen.size >= 16) continue

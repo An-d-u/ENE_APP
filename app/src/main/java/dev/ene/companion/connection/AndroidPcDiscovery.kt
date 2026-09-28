@@ -98,7 +98,7 @@ internal class AndroidDiscoveryBackend(private val context: Context) : Discovery
             try {
                 connectivity.registerNetworkCallback(NetworkRequest.Builder().addTransportType(NetworkCapabilities.TRANSPORT_WIFI).build(), networkCallback, handler)
                 callbackRegistered = true
-                if (Build.VERSION.SDK_INT < 33) {
+                if (needsDiscoveryMulticastLock(Build.VERSION.SDK_INT)) {
                     multicast = context.getSystemService(WifiManager::class.java).createMulticastLock("ene-companion-discovery").apply { setReferenceCounted(false); acquire() }
                 }
                 requested = true

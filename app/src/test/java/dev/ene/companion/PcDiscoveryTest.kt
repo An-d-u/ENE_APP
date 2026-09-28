@@ -9,6 +9,10 @@ import java.io.Closeable
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class PcDiscoveryTest {
+    @Test fun android13LegacyDiscoveryAlsoHoldsMulticastLock() {
+        for (sdk in 26..33) assertTrue("API $sdk", needsDiscoveryMulticastLock(sdk))
+        for (sdk in 34..36) assertFalse(needsDiscoveryMulticastLock(sdk))
+    }
     private val network = LanScope(1, listOf(Ipv4Prefix(0xc633640aL, 24)))
     private class Backend(var network: LanScope?) : DiscoveryBackend {
         var emit: ((DiscoveryEvent) -> Unit)? = null
@@ -127,5 +131,17 @@ class PcDiscoveryTest {
         advanceTimeBy(8000); runCurrent()
         assertEquals(16, resolutions)
         assertTrue(result.await().endpoints.isEmpty())
+    }
+
+    @Test fun repeatedFoundLostServiceIsResolvedOnlyOncePerBrowse() = runTest {
+        val backend = Backend(network)
+        val discovery = BoundedPcDiscovery(backend) { testScheduler.currentTime }
+        var resolutions = 0
+        val repeated = service("synthetic-service") { resolutions++; ResolvedService(emptyList(), 8765, emptyMap()) }
+        val result = async { discovery.discover(emptySet()) }; runCurrent()
+        repeat(20) { backend.emit!!(DiscoveryEvent.Found(repeated)); runCurrent(); backend.emit!!(DiscoveryEvent.Lost(repeated.key)); runCurrent() }
+        advanceTimeBy(8000); runCurrent()
+        result.await()
+        assertEquals(1, resolutions)
     }
 }
