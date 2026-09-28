@@ -57,6 +57,8 @@ class ConnectionRecoveryTest {
             assertEquals(listOf(a, b), scenario.opened)
             assertEquals(ConnectionPhase.CONNECTED, scenario.repository.state.value.phase)
             assertEquals(scenario.credentials, scenario.registrations.value)
+            assertEquals(ConnectionFailure(ConnectionStage.SECURE_SESSION, "connection_closed"), scenario.repository.state.value.diagnostics.lastFailure)
+            assertEquals(ConnectionStage.CONNECTED, scenario.repository.state.value.diagnostics.stage)
             assertEquals(0, scenario.registrations.clears)
         } finally { scenario.repository.close(); runCurrent() }
     }
@@ -213,6 +215,18 @@ class ConnectionRecoveryTest {
         } finally { scenario.repository.close(); runCurrent() }
     }
 
+    @Test fun forgettingRegistrationDoesNotResetAlreadyLoadedExitDiagnostics() = runTest {
+        val scenario = Scenario(this)
+        val previous = PreviousExit(ExitRecordStatus.AVAILABLE, 10, 100)
+        try {
+            scenario.repository.previousExit(previous)
+            scenario.repository.foreground(true); runCurrent()
+            scenario.repository.forget(); runCurrent()
+            assertEquals(previous, scenario.repository.state.value.diagnostics.previousExit)
+            assertEquals(ConnectionStage.IDLE, scenario.repository.state.value.diagnostics.stage)
+        } finally { scenario.repository.close(); runCurrent() }
+    }
+
     @Test fun addressSaveFailureDoesNotDiscardHealthySessionOrExistingSettings() = runTest {
         val discovery = Discovery()
         val scenario = Scenario(this, discovery)
@@ -221,7 +235,7 @@ class ConnectionRecoveryTest {
         try {
             scenario.repository.foreground(true); runCurrent()
             assertEquals(ConnectionPhase.CONNECTED, scenario.repository.state.value.phase)
-            assertEquals("connection_settings_save_failed", scenario.repository.state.value.addressSaveNotice)
+            assertEquals("connection_settings_save_failed", scenario.repository.state.value.diagnostics.storageNotice)
             assertEquals(listOf(a, b), scenario.profiles.value!!.addresses)
             assertFalse(scenario.sockets.single().cancelled)
             assertNotNull(scenario.registrations.value)

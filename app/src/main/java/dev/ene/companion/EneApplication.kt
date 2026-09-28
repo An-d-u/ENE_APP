@@ -6,6 +6,7 @@ import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ProcessLifecycleOwner
 import dev.ene.companion.connection.ConnectionRepository
 import dev.ene.companion.connection.androidPcDiscovery
+import dev.ene.companion.connection.androidPreviousExit
 import dev.ene.companion.storage.ConnectionSettingsStore
 import dev.ene.companion.storage.TokenStore
 import dev.ene.companion.audio.AndroidAudioPlatform
@@ -22,11 +23,16 @@ class EneApplication : Application(), DefaultLifecycleObserver {
 
     override fun onCreate() {
         super<Application>.onCreate()
+        val startedMillis = System.currentTimeMillis()
         connection = ConnectionRepository(TokenStore(this), ConnectionSettingsStore(this),
             discovery = androidPcDiscovery(this),
             audioPlatform = AndroidAudioPlatform(this), characterPlatform = CharacterPlatform.android(this),
             placementController = CharacterPlacementController(CharacterPlacementStore(this), applicationScope))
         ProcessLifecycleOwner.get().lifecycle.addObserver(this)
+        applicationScope.launch {
+            val previous = withContext(Dispatchers.IO) { androidPreviousExit(this@EneApplication, startedMillis) }
+            connection.previousExit(previous)
+        }
     }
     override fun onStart(owner: LifecycleOwner) { connection.foreground(true) }
     override fun onStop(owner: LifecycleOwner) { connection.foreground(false) }

@@ -54,6 +54,16 @@ class ConnectionRepository(
     }
     private var active: Active? = null
 
+    fun previousExit(value: PreviousExit) {
+        diagnostics { copy(previousExit = value) }
+    }
+
+    private fun diagnostics(change: ConnectionDiagnostics.() -> ConnectionDiagnostics) {
+        mutableState.value = mutableState.value.copy(diagnostics = mutableState.value.diagnostics.change())
+    }
+    private fun stage(value: ConnectionStage) { diagnostics { copy(stage = value) } }
+    private fun failed(code: String) { diagnostics { failed(stage, code) } }
+
     init {
         scope.launch { characterPlacement.collect { active?.character?.placement(it) } }
     }
@@ -124,10 +134,11 @@ class ConnectionRepository(
     fun forget(): Job = command {
         stopConnection()
         drafts = DraftOutbox()
-        mutableState.value = ConnectionViewState(phase = ConnectionPhase.ACTION_REQUIRED)
+        val retainedDiagnostics = ConnectionDiagnostics(previousExit = mutableState.value.diagnostics.previousExit)
+        mutableState.value = ConnectionViewState(phase = ConnectionPhase.ACTION_REQUIRED, diagnostics = retainedDiagnostics)
         clearCharacterCache()
         withContext(ioDispatcher) { registrations.clear(); profiles.clear() }
-        mutableState.value = ConnectionViewState()
+        mutableState.value = ConnectionViewState(diagnostics = retainedDiagnostics)
     }
 
     fun retry(): Job = command {
@@ -220,9 +231,11 @@ class ConnectionRepository(
         val backoff = RetryBackoff(jitter)
         var retry = false
         while (currentCoroutineContext().isActive) {
+            var failureRecorded = false
             try {
+                stage(ConnectionStage.SAVED_ADDRESSES)
                 val credentials = withContext(ioDispatcher) { registrations.load() }
-                if (credentials == null) { mutableState.value = ConnectionViewState(draft = drafts.draft); return }
+                if (credentials == null) { mutableState.value = ConnectionViewState(draft = drafts.draft, diagnostics = mutableState.value.diagnostics.copy(stage = ConnectionStage.IDLE)); return }
                 mutableState.value = mutableState.value.copy(registered = true)
                 val profile = withContext(ioDispatcher) { profiles.load() }
                 if (profile == null || profile.serverId != credentials.serverId) throw ConnectionException("invalid_connection_settings")
@@ -236,6 +249,7 @@ class ConnectionRepository(
                         var synchronized = false
                         try {
                             if (network != null && !discovery.isCurrent(network)) throw ConnectionException("pc_unreachable")
+                            stage(ConnectionStage.SERVER_INFO)
                             EndpointResolver(transport).verify(credentials.serverId, endpoint)
                             if (network != null && !discovery.isCurrent(network)) throw ConnectionException("pc_unreachable")
                             runCandidate(credentials, transport, endpoint) {
@@ -249,30 +263,35 @@ class ConnectionRepository(
                         } catch (error: TimeoutCancellationException) {
                             currentCoroutineContext().ensureActive()
                             trust.validate()
+                            failed("pc_unreachable"); failureRecorded = true
                             if (synchronized) throw ConnectionException("pc_unreachable")
                             failures.add(ConnectionException("pc_unreachable"))
                         } catch (error: ConnectionException) {
                             trust.validate()
+                            failed(error.code); failureRecorded = true
                             if (synchronized || error.code == "authorization_revoked" && error.peerAuthenticated) throw error
                             failures.add(error)
                         }
                       }
                     }
                     attempt(profile.addresses)
+                    stage(ConnectionStage.DISCOVERY)
                     val discovered = discovery.discover(profile.addresses.toSet())
-                    mutableState.value = mutableState.value.copy(discoveryNotice = discovered.notice)
+                    diagnostics { copy(discoveryNotice = discovered.notice?.let(::diagnosticCode)) }
                     if (discovered.network != null && discovery.isCurrent(discovered.network)) attempt(discovered.endpoints, discovered.network)
                     throw candidateFailure(failures)
                 }
             } catch (error: TimeoutCancellationException) {
                 currentCoroutineContext().ensureActive()
+                failed("pc_unreachable")
                 show(ConnectionPhase.RECONNECTING, "pc_unreachable")
             } catch (error: CancellationException) { throw error }
             catch (error: Exception) {
                 val code = failureCode(error)
+                if (!failureRecorded) failed(code)
                 if (code == "authorization_revoked" && error is ConnectionException && error.peerAuthenticated) {
                     drafts = DraftOutbox()
-                    mutableState.value = ConnectionViewState(errorCode = code)
+                    mutableState.value = ConnectionViewState(errorCode = code, diagnostics = mutableState.value.diagnostics.copy(stage = ConnectionStage.IDLE))
                     try {
                         clearCharacterCache()
                         withContext(ioDispatcher) { registrations.clear(); profiles.clear() }
@@ -285,6 +304,7 @@ class ConnectionRepository(
                 show(ConnectionPhase.RECONNECTING, code)
             }
             retry = true
+            stage(ConnectionStage.RETRY_WAIT)
             delay(backoff.nextMillis())
         }
     }
@@ -302,9 +322,9 @@ class ConnectionRepository(
                     val updated = current.copy(addresses = (listOf(endpoint) + current.addresses).distinct().take(8))
                     if (updated != current) profiles.save(updated)
                 }
-                mutableState.value = mutableState.value.copy(addressSaveNotice = null)
+                diagnostics { copy(storageNotice = null) }
             } catch (cancel: CancellationException) { throw cancel }
-            catch (_: Exception) { mutableState.value = mutableState.value.copy(addressSaveNotice = "connection_settings_save_failed") }
+            catch (_: Exception) { diagnostics { copy(storageNotice = "connection_settings_save_failed") } }
         }
     }
 
@@ -314,6 +334,7 @@ class ConnectionRepository(
         endpoint: Endpoint,
         onSynchronized: suspend () -> Unit,
     ) {
+        stage(ConnectionStage.SECURE_SESSION)
         val socket = transport.open(endpoint, credentials.serverId, credentials.token, pairing = false)
         try {
             val requested = buildList {
@@ -328,6 +349,7 @@ class ConnectionRepository(
             }
             if (ready.server_id != credentials.serverId || ready.registration_generation != credentials.generation) throw ConnectionException("registration_changed")
             if (ready.capabilities.any { it !in requested }) throw ConnectionException("invalid_server_info")
+            stage(ConnectionStage.INITIAL_SYNC)
             mutableState.value = mutableState.value.copy(phase = ConnectionPhase.SYNCING, endpoint = endpoint, errorCode = null,
                 audioOutput = AudioOutputStatus(reason = if ("audio_pcm_v1" in ready.capabilities) "syncing" else "audio_not_negotiated"))
             val session = ConversationSession(ready, nowMillis)
@@ -395,8 +417,9 @@ class ConnectionRepository(
                 if (frame is ResyncRequired || frame is SnapshotBegin) pendingSyncHeaders--
                 if (needsSync && !socket.send(drafts.syncRequest(credentials, session))) throw ConnectionException("connection_closed")
                 if (frame is RequestStatus) drafts.status(frame)
-                if (session.syncing) show(ConnectionPhase.SYNCING)
+                if (session.syncing) { show(ConnectionPhase.SYNCING); stage(ConnectionStage.INITIAL_SYNC) }
                 else session.snapshot?.let { snapshot ->
+                    stage(ConnectionStage.CONNECTED)
                     mutableState.value = mutableState.value.copy(phase = ConnectionPhase.CONNECTED,
                         messages = snapshot.messages, processing = snapshot.processing, errorCode = null)
                     drafts.synchronized(snapshot)?.let {
@@ -443,10 +466,12 @@ class ConnectionRepository(
         active?.character?.shutdown()
         connection?.cancelAndJoin()
         connection = null
+        stage(ConnectionStage.IDLE)
     }
 
     private fun show(phase: ConnectionPhase, error: String? = null) {
         mutableState.value = mutableState.value.copy(phase = phase, errorCode = error)
+        if (phase == ConnectionPhase.ACTION_REQUIRED || phase == ConnectionPhase.PAUSED) stage(ConnectionStage.IDLE)
     }
 
     override fun close() {

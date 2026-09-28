@@ -6,6 +6,12 @@ import java.io.File
 
 /** 정적 안전망이다. 실제 단말의 수명·카메라·키보드 시험을 대체하지 않는다. */
 class UiPrivacyPolicyTest {
+    @Test fun exitDiagnosticsNeverReadTraceOrDescriptionOrWriteFiles() {
+        val diagnostics = File("src/main/java/dev/ene/companion/connection/AndroidExitDiagnostics.kt").readText()
+        for (forbidden in listOf("getDescription", ".description", "getTraceInputStream", ".traceInputStream", "File(", "Log.", "println(", "OkHttp")) assertFalse(diagnostics.contains(forbidden))
+        assertTrue(diagnostics.contains("Build.VERSION.SDK_INT < 30"))
+        assertTrue(diagnostics.contains("getHistoricalProcessExitReasons(context.packageName, 0, 0)"))
+    }
     @Test fun repositoryIsOwnedByApplicationAndScreenDoesNotPersistConversation() {
         val app = File("src/main/java/dev/ene/companion/EneApplication.kt").readText()
         assertTrue(app.contains("ProcessLifecycleOwner.get().lifecycle.addObserver"))
