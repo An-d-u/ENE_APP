@@ -5,6 +5,7 @@ import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ProcessLifecycleOwner
 import dev.ene.companion.connection.ConnectionRepository
+import dev.ene.companion.connection.androidPcDiscovery
 import dev.ene.companion.storage.ConnectionSettingsStore
 import dev.ene.companion.storage.TokenStore
 import dev.ene.companion.audio.AndroidAudioPlatform
@@ -22,6 +23,7 @@ class EneApplication : Application(), DefaultLifecycleObserver {
     override fun onCreate() {
         super<Application>.onCreate()
         connection = ConnectionRepository(TokenStore(this), ConnectionSettingsStore(this),
+            discovery = androidPcDiscovery(this),
             audioPlatform = AndroidAudioPlatform(this), characterPlatform = CharacterPlatform.android(this),
             placementController = CharacterPlacementController(CharacterPlacementStore(this), applicationScope))
         ProcessLifecycleOwner.get().lifecycle.addObserver(this)

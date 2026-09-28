@@ -64,8 +64,11 @@ class ConnectionRepositoryTest {
     }
     class Profiles : ConnectionSettingsStorage {
         var value: ConnectionProfile? = ConnectionProfile(serverId, listOf(Endpoint.parse("192.0.2.1", 8765), Endpoint.parse("192.0.2.2", 8765)))
+        var failSave = false
+        var saves = 0
+        var beforeSave: (() -> Unit)? = null
         override fun load() = value
-        override fun save(profile: ConnectionProfile) { value = profile }
+        override fun save(profile: ConnectionProfile) { beforeSave?.invoke(); if (failSave) throw ConnectionException("connection_settings_save_failed"); value = profile; saves++ }
         override fun clear() { value = null }
     }
     class Socket : CompanionSocket {
@@ -220,7 +223,7 @@ class ConnectionRepositoryTest {
         }
     }
 
-    private fun qr() = buildJsonObject {
+    internal fun qr() = buildJsonObject {
         put("protocol_version", 1); put("transport", "tls_v1"); put("server_id", serverId)
         put("pairing_id", pairingId); put("secret", secret()); put("ca_certificate", TlsTestCertificates.encoded(ca.certificate))
         put("expires_at", java.time.Instant.now().plusSeconds(120).toString())

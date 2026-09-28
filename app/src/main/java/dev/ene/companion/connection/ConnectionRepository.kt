@@ -28,6 +28,7 @@ class ConnectionRepository(
     private val audioPlatform: AudioPlatform? = null,
     private val characterPlatform: CharacterPlatform? = null,
     private val placementController: CharacterPlacementController? = null,
+    private val discovery: PcDiscovery = NoPcDiscovery,
 ) : Closeable {
     private val scope = CoroutineScope(SupervisorJob() + dispatcher)
     private val transition = Mutex()
@@ -215,6 +216,7 @@ class ConnectionRepository(
     }
 
     private suspend fun connectRegistered() {
+        val expectedGeneration = generation
         val backoff = RetryBackoff(jitter)
         var retry = false
         while (currentCoroutineContext().isActive) {
@@ -228,13 +230,19 @@ class ConnectionRepository(
                 val trust = credentials.trustedServer(wallClock)
                 transportFactory(trust).use { transport ->
                     val failures = mutableListOf<ConnectionException>()
-                    for (endpoint in profile.addresses.distinct()) {
+                    suspend fun attempt(candidates: List<Endpoint>, network: LanScope? = null) {
+                      for (endpoint in candidates.distinct().take(8)) {
                         trust.validate()
                         var synchronized = false
                         try {
+                            if (network != null && !discovery.isCurrent(network)) throw ConnectionException("pc_unreachable")
                             EndpointResolver(transport).verify(credentials.serverId, endpoint)
+                            if (network != null && !discovery.isCurrent(network)) throw ConnectionException("pc_unreachable")
                             runCandidate(credentials, transport, endpoint) {
-                                synchronized = true
+                                if (!synchronized) {
+                                    synchronized = true
+                                    rememberEndpoint(expectedGeneration, credentials, endpoint, network)
+                                }
                                 backoff.reset()
                             }
                             throw ConnectionException("connection_closed")
@@ -248,7 +256,12 @@ class ConnectionRepository(
                             if (synchronized || error.code == "authorization_revoked" && error.peerAuthenticated) throw error
                             failures.add(error)
                         }
+                      }
                     }
+                    attempt(profile.addresses)
+                    val discovered = discovery.discover(profile.addresses.toSet())
+                    mutableState.value = mutableState.value.copy(discoveryNotice = discovered.notice)
+                    if (discovered.network != null && discovery.isCurrent(discovered.network)) attempt(discovered.endpoints, discovered.network)
                     throw candidateFailure(failures)
                 }
             } catch (error: TimeoutCancellationException) {
@@ -273,6 +286,25 @@ class ConnectionRepository(
             }
             retry = true
             delay(backoff.nextMillis())
+        }
+    }
+
+    private suspend fun rememberEndpoint(expected: Long, credentials: DeviceCredentials, endpoint: Endpoint, network: LanScope?) {
+        // 취소 가능한 잠금만 사용한다. 등록 해제는 이 저장이 끝난 뒤 파일을 지운다.
+        transition.withLock {
+            if (!foreground || generation != expected || network != null && !discovery.isCurrent(network)) return
+            try {
+                withContext(ioDispatcher) {
+                    if (registrations.load() != credentials) return@withContext
+                    val current = profiles.load() ?: return@withContext
+                    if (current.serverId != credentials.serverId || network != null && !discovery.isCurrent(network)) return@withContext
+                    currentCoroutineContext().ensureActive()
+                    val updated = current.copy(addresses = (listOf(endpoint) + current.addresses).distinct().take(8))
+                    if (updated != current) profiles.save(updated)
+                }
+                mutableState.value = mutableState.value.copy(addressSaveNotice = null)
+            } catch (cancel: CancellationException) { throw cancel }
+            catch (_: Exception) { mutableState.value = mutableState.value.copy(addressSaveNotice = "connection_settings_save_failed") }
         }
     }
 

@@ -20,6 +20,8 @@ data class ConnectionViewState(
     val registered: Boolean = false,
     val endpoint: Endpoint? = null,
     val errorCode: String? = null,
+    val discoveryNotice: String? = null,
+    val addressSaveNotice: String? = null,
     val messages: List<PublicMessage> = emptyList(),
     val processing: ProcessingState = ProcessingState("idle"),
     val draft: String = "",
