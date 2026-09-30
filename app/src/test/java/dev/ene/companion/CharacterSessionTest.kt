@@ -66,9 +66,12 @@ class CharacterSessionTest {
 
     @Test fun sameConnectionSyncHidesImmediatelyButRetainsOwnership() = runTest {
         var loads = 0
-        val f = Fixture(this) { loads++; result() }
+        val f = Fixture(this, chat = true) { loads++; result() }
         f.activate(); advanceTimeBy(300); runCurrent(); f.rendered()
+        val generation = f.states.last().viewGeneration
         repeat(3) {
+            f.session.receive(ChatActionsState(1, audioId(1), audioId(2), audioId(3), it.toLong(), it.toLong(), it + 1L,
+                null, null, false, "no_target", false, "no_target"))
             f.session.baseState(audioId(1), audioId(3), false)
             assertTrue(f.states.last().retainRenderer)
             assertFalse(f.states.last().presentationAllowed)
@@ -76,6 +79,7 @@ class CharacterSessionTest {
             f.session.baseState(audioId(1), audioId(3), true); f.rendered()
         }
         assertEquals(1, loads)
+        assertEquals(generation, f.states.last().viewGeneration)
         assertTrue(f.renderer.presentations.last().second)
         f.session.closeAndJoin()
     }
@@ -189,8 +193,9 @@ class CharacterSessionTest {
         assertEquals(1, clears)
         cache.clear(); assertEquals(0, cache.versionCount)
     }
-    private inner class Fixture(test: TestScope, controls: Boolean = false, loader: suspend () -> CharacterLoad) {
-        private val sessionReady = if (controls) ready.copy(capabilities = ready.capabilities + "character_controls_v1") else ready
+    private inner class Fixture(test: TestScope, controls: Boolean = false, chat: Boolean = false, loader: suspend () -> CharacterLoad) {
+        private val sessionReady = ready.copy(capabilities = ready.capabilities +
+            (if (controls) listOf("character_controls_v1") else emptyList()) + (if (chat) listOf("chat_actions_v1") else emptyList()))
         val states = mutableListOf<CharacterViewState>()
         val media = mutableListOf<Media>()
         val sent = mutableListOf<WireMessage>()

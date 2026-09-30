@@ -10,19 +10,41 @@ import org.junit.Test
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class AudioRepositoryTest {
+    @Test fun chatActionStateDoesNotStopOrRestartPlayingPhoneAudio() = runTest {
+        val transport = Transport(chat = true); val platform = AudioTestPlatform()
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val repo = ConnectionRepository(ConnectionRepositoryTest.Registrations(ConnectionRepositoryTest.credentials()), ConnectionRepositoryTest.Profiles(),
+            { transport }, dispatcher, dispatcher, dispatcher, nowMillis = { testScheduler.currentTime }, audioPlatform = platform)
+        try {
+            repo.activityResumed(true); repo.foreground(true); runCurrent()
+            transport.socket.offer(ExtensionsReady(1, audioId(1), audioId(2), listOf("audio_pcm_v1", "chat_actions_v1")))
+            val message = SessionFixtures.message().copy(id = audioId(4), role = "assistant")
+            SessionFixtures.frames(listOf(message), epoch = audioId(1), conversation = audioId(3)).forEach(transport.socket::offer); runCurrent()
+            transport.socket.offer(AudioOffer(1, audioId(1), audioId(2), audioId(3), audioId(4), audioId(5), audioId(6), 24000, 1, 2, 2000)); runCurrent()
+            transport.media.chunks.send(ByteArray(9600)); runCurrent()
+            transport.socket.offer(AudioStart(1, audioId(1), audioId(2), audioId(3), audioId(4), audioId(5), audioId(6))); runCurrent()
+            val sink = platform.sinks.single()
+            repeat(3) {
+                transport.socket.offer(ChatActionsState(1, audioId(1), audioId(2), audioId(3), 0, 0, it + 1L,
+                    null, null, false, "no_target", false, "no_target")); runCurrent()
+            }
+            assertEquals(1, sink.starts); assertEquals(0, sink.releases)
+            assertEquals("phone", repo.state.value.audioOutput.output)
+        } finally { repo.close(); runCurrent() }
+    }
     private class HeldDecode : CoroutineDispatcher() {
         val tasks = ArrayDeque<Runnable>()
         override fun dispatch(context: kotlin.coroutines.CoroutineContext, block: Runnable) { tasks.add(block) }
         fun next() { if (tasks.isNotEmpty()) tasks.removeFirst().run() }
     }
-    private class Transport : ConnectionTransport {
+    private class Transport(val chat: Boolean = false) : ConnectionTransport {
         val socket = ConnectionRepositoryTest.Socket()
         val media = TestAudioMedia()
         var current: () -> Boolean = { false }
         override val supportsAudio = true
         override suspend fun info(endpoint: Endpoint) = ServerInfo(ConnectionRepositoryTest.serverId, listOf(1))
         override suspend fun open(endpoint: Endpoint, expectedServerId: String, token: String?, pairing: Boolean): CompanionSocket {
-            socket.offer(Ready(expectedServerId, audioId(1), audioId(3), 1, listOf("audio_pcm_v1")))
+            socket.offer(Ready(expectedServerId, audioId(1), audioId(3), 1, listOf("audio_pcm_v1") + if (chat) listOf("chat_actions_v1") else emptyList()))
             return socket
         }
         override fun audio(token: String, context: ExtensionContext, isCurrent: () -> Boolean): AudioMedia {
@@ -44,7 +66,7 @@ class AudioRepositoryTest {
         try {
             repo.activityResumed(true)
             repo.foreground(true); runCurrent()
-            assertEquals(listOf("audio_pcm_v1"), transport.socket.sent.filterIsInstance<Hello>().single().capabilities)
+            assertEquals(listOf("chat_actions_v1", "audio_pcm_v1"), transport.socket.sent.filterIsInstance<Hello>().single().capabilities)
             transport.socket.offer(ExtensionsReady(1, audioId(1), audioId(2), listOf("audio_pcm_v1")))
             val message = SessionFixtures.message().copy(id = audioId(4), role = "assistant")
             SessionFixtures.frames(listOf(message), epoch = audioId(1), conversation = audioId(3)).forEach(transport.socket::offer)
