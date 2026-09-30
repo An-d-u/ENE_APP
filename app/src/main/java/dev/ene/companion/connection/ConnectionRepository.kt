@@ -130,6 +130,7 @@ class ConnectionRepository(
     }
     fun editMessageDraft(text: String): Job = command { chatActions.editText(text); publishDraft() }
     fun cancelMessageEditor(): Job = command { chatActions.cancelEditor(); publishDraft() }
+    fun reopenMessageEditor(): Job = command { chatActions.reopenEditor(); publishDraft() }
     fun submitMessageEdit(): Job = command {
         if (canAct()) chatActions.createEdit()?.let(::sendAction)
     }

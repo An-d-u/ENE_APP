@@ -248,6 +248,14 @@ internal class ChatActionState(
 
     fun cancelEditor() { editor = null }
 
+    fun reopenEditor() {
+        if (pending != null) return
+        val retained = editor ?: return
+        if (view.canEdit && latest?.user_message_id == retained.targetId && matchesScope(retained.serverEpoch, retained.conversationId)) {
+            openEditor(retained.targetId)
+        } else editor = retained.copy(open = true)
+    }
+
     fun createEdit(): ChatAction? {
         val value = view.editor ?: return null
         if (!value.canSubmit) return null

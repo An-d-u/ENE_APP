@@ -1,9 +1,6 @@
 package dev.ene.companion.ui
 
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -43,24 +40,11 @@ fun ConnectionScreen(repository: ConnectionRepository) {
                 TextButton(onClick = { repository.retry() }, modifier = Modifier.heightIn(min = 48.dp)) { Text("다시 연결") }
             }
             CharacterPanel(repository, controlsVisible = state.phase == ConnectionPhase.CONNECTED)
-            val listState = rememberLazyListState()
-            val nearEnd by remember { derivedStateOf { !listState.canScrollForward } }
-            LaunchedEffect(state.messages.lastOrNull()?.id) {
-                if (nearEnd && state.messages.isNotEmpty()) listState.scrollToItem(state.messages.lastIndex)
-            }
-            LazyColumn(Modifier.weight(1f).fillMaxWidth(), state = listState, verticalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(vertical = 8.dp)) {
-                if (state.messages.isEmpty()) item {
-                    Text(if (state.phase == ConnectionPhase.CONNECTED) "아직 표시할 대화가 없습니다." else "PC ENE를 실행하고 같은 Wi-Fi에서 연결해 주세요.", style = MaterialTheme.typography.bodyMedium)
-                }
-                items(state.messages, key = { it.id }) { message ->
-                    Surface(color = if (message.role == "user") MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainer, shape = MaterialTheme.shapes.medium) {
-                        Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                            Text(if (message.role == "user") "나" else "ENE", style = MaterialTheme.typography.labelMedium)
-                            Text(message.text, style = MaterialTheme.typography.bodyLarge)
-                            if (message.attachment_unsupported == true) Text("첨부 내용은 PC에서 확인해 주세요.", style = MaterialTheme.typography.bodySmall)
-                        }
-                    }
-                }
+            ChatHistory(state, Modifier.weight(1f), { repository.openMessageEditor(it) }, { repository.rerollMessage(it) })
+            state.chatActions.notice?.let { Text(chatActionReason(it), style = MaterialTheme.typography.bodySmall) }
+            chatActionCompatibilityNotice(state)?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+            if (state.chatActions.editor?.open == false && !state.chatActions.busy) {
+                TextButton(onClick = { repository.reopenMessageEditor() }, modifier = Modifier.heightIn(min = 48.dp)) { Text("보관된 편집 초안 보기") }
             }
             if (state.sendState != null) Text(when (state.sendState) { "reserved" -> "PC에서 전송을 준비하고 있습니다."; "accepted" -> "PC에 접수되었습니다."; else -> "전송 결과를 확인하고 있습니다." }, style = MaterialTheme.typography.bodySmall)
             Row(Modifier.fillMaxWidth().padding(bottom = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -69,6 +53,9 @@ fun ConnectionScreen(repository: ConnectionRepository) {
                 Button(onClick = { repository.sendDraft() }, enabled = state.canSend, modifier = Modifier.heightIn(min = 56.dp).padding(top = 8.dp)) { Text("전송") }
             }
         }
+    }
+    state.chatActions.editor?.takeIf { it.open }?.let { editor ->
+        MessageEditDialog(editor, { repository.editMessageDraft(it) }, { repository.submitMessageEdit() }, { repository.cancelMessageEditor() })
     }
     when (dialog) {
         "diagnostics" -> ConnectionDiagnosticsDialog(state.diagnostics) { dialog = null }
