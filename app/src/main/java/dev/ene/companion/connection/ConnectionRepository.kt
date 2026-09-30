@@ -45,8 +45,10 @@ class ConnectionRepository(
     private var generation = 0L
     private var connection: Job? = null
     private var drafts = DraftOutbox()
+    private val chatActions = ChatActionState(nowMillis)
     private class Active(val credentials: DeviceCredentials, val session: ConversationSession, val socket: CompanionSocket) {
         var responseDeadline: Long? = null
+        var pendingBaseHeaders = 0
         val mediaCurrent = AtomicBoolean(true)
         var extensions: ExtensionSession? = null
         var character: CharacterSession? = null
@@ -107,7 +109,7 @@ class ConnectionRepository(
     fun editDraft(text: String): Job = command { drafts.edit(text); publishDraft() }
     fun sendDraft(): Job = command {
         val current = active ?: return@command
-        if (!mutableState.value.canSend || current.session.syncing) return@command
+        if (!mutableState.value.canSend || current.session.syncing || current.pendingBaseHeaders > 0 || !current.mediaCurrent.get()) return@command
         val message = drafts.create(current.credentials, current.session)
         current.responseDeadline = nowMillis() + 10_000
         publishDraft()
@@ -117,9 +119,59 @@ class ConnectionRepository(
         }
     }
 
+    private fun canAct(): Boolean = active?.let {
+        mutableState.value.phase == ConnectionPhase.CONNECTED && !it.session.syncing &&
+            it.mediaCurrent.get() && it.pendingBaseHeaders == 0 && drafts.state == null && !chatActions.view.busy
+    } == true
+
+    fun openMessageEditor(targetId: String): Job = command {
+        if (canAct()) chatActions.openEditor(targetId)
+        publishDraft()
+    }
+    fun editMessageDraft(text: String): Job = command { chatActions.editText(text); publishDraft() }
+    fun cancelMessageEditor(): Job = command { chatActions.cancelEditor(); publishDraft() }
+    fun submitMessageEdit(): Job = command {
+        if (canAct()) chatActions.createEdit()?.let(::sendAction)
+    }
+    fun rerollMessage(targetId: String): Job = command {
+        if (canAct()) chatActions.createReroll(targetId)?.let(::sendAction)
+    }
+    private fun sendAction(message: ChatAction) {
+        val current = active ?: return
+        current.responseDeadline = nowMillis() + 10_000
+        publishDraft()
+        if (!current.socket.send(message)) {
+            show(ConnectionPhase.RECONNECTING, "connection_closed")
+            current.socket.cancel()
+        }
+    }
+
+    private fun syncRequest(record: Active): SyncRequest = if (chatActions.hasPending) chatActions.syncRequest()
+        else drafts.syncRequest(record.credentials, record.session)
+
+    private fun pumpChatActions(record: Active) {
+        // consume 작업이 끝난 경계에서만 조립기를 변경한다.
+        if (!chatActions.refreshing) record.session.finishRefresh()
+        try { chatActions.checkTimeout(record.session.syncing) }
+        catch (_: IllegalStateException) { throw ConnectionException("request_status_timeout") }
+        chatActions.nextQuery()?.let {
+            if (it.refresh) {
+                record.session.beginRefresh()
+                chatActions.baseState(record.session.serverEpoch, record.session.conversationId, false)
+            }
+            if (!record.socket.send(it)) throw ConnectionException("connection_closed")
+        }
+        publishDraft()
+    }
+
     private fun publishDraft() {
+        val actions = chatActions.view.let { value ->
+            if (drafts.state == null && mutableState.value.phase == ConnectionPhase.CONNECTED) value
+            else value.copy(canEdit = false, canReroll = false,
+                editReason = "busy", rerollReason = "busy", editor = value.editor?.copy(canSubmit = false))
+        }
         mutableState.value = mutableState.value.copy(draft = drafts.draft, sendState = drafts.state,
-            errorCode = drafts.notice ?: mutableState.value.errorCode)
+            chatActions = actions, errorCode = drafts.notice ?: mutableState.value.errorCode)
     }
 
     fun updateAddress(host: String, port: Int): Job = command {
@@ -134,6 +186,7 @@ class ConnectionRepository(
     fun forget(): Job = command {
         stopConnection()
         drafts = DraftOutbox()
+        chatActions.forget()
         val retainedDiagnostics = ConnectionDiagnostics(previousExit = mutableState.value.diagnostics.previousExit)
         mutableState.value = ConnectionViewState(phase = ConnectionPhase.ACTION_REQUIRED, diagnostics = retainedDiagnostics)
         clearCharacterCache()
@@ -207,6 +260,7 @@ class ConnectionRepository(
                                         profiles.save(ConnectionProfile(qr.serverId, listOf(endpoint) + qr.addresses.filter { it != endpoint }))
                                         registrations.save(credentials)
                                     }
+                                    chatActions.forget()
                                     return@withTimeout
                                 }
                                 is PairFailed -> {
@@ -291,6 +345,7 @@ class ConnectionRepository(
                 if (!failureRecorded) failed(code)
                 if (code == "authorization_revoked" && error is ConnectionException && error.peerAuthenticated) {
                     drafts = DraftOutbox()
+                    chatActions.forget()
                     mutableState.value = ConnectionViewState(errorCode = code, diagnostics = mutableState.value.diagnostics.copy(stage = ConnectionStage.IDLE))
                     try {
                         clearCharacterCache()
@@ -338,6 +393,7 @@ class ConnectionRepository(
         val socket = transport.open(endpoint, credentials.serverId, credentials.token, pairing = false)
         try {
             val requested = buildList {
+                add("chat_actions_v1")
                 if (audioPlatform != null && transport.supportsAudio) add("audio_pcm_v1")
                 if (characterPlatform?.supported == true && transport.supportsCharacter) {
                     add("character_v1"); add("character_controls_v1")
@@ -355,6 +411,7 @@ class ConnectionRepository(
             val session = ConversationSession(ready, nowMillis)
             val record = Active(credentials, session, socket)
             active = record
+            chatActions.connected(CharacterRepository.identity(credentials), ready)
             val character = characterPlatform?.takeIf { "character_v1" in ready.capabilities }?.let { platform ->
                 CharacterSession(ready, CharacterRepository.identity(credentials), CoroutineScope(currentCoroutineContext()), platform,
                     mediaFactory = { context, current -> transport.character(credentials.token, context) { record.mediaCurrent.get() && current() } },
@@ -388,16 +445,36 @@ class ConnectionRepository(
             var pendingSyncHeaders = 0
             var headerEpoch = ready.server_epoch
             var headerConversation = ready.conversation_id
-            if (!socket.send(drafts.syncRequest(credentials, session))) throw ConnectionException("connection_closed")
+            if (!socket.send(syncRequest(record))) throw ConnectionException("connection_closed")
             publishDraft()
             exchangeSession(socket, nowMillis, {
                 session.checkTimeout()
+                pumpChatActions(record)
                 val current = requireNotNull(active)
-                if (!session.syncing && drafts.awaitingResult) {
+                if (!session.syncing && (drafts.awaitingResult || chatActions.awaitingResult)) {
                     val deadline = current.responseDeadline ?: (nowMillis() + 10_000).also { current.responseDeadline = it }
                     if (nowMillis() >= deadline) throw ConnectionException("request_status_timeout")
                 } else current.responseDeadline = null
-            }, onExtension = { extensions?.receive(it); character?.receive(it) }, onBaseHeader = { header ->
+            }, onExtension = {
+                when (it) {
+                    is ExtensionsReady -> chatActions.ready(it)
+                    is ChatActionsState -> chatActions.receiveState(it)
+                    else -> Unit
+                }
+                publishDraft()
+                extensions?.receive(it); character?.receive(it)
+            }, onBaseHeader = { header ->
+                if (header is ResyncRequired || header is SnapshotBegin || header is ChatEvent) {
+                    record.pendingBaseHeaders++
+                    val (epoch, conversation) = when (header) {
+                        is ResyncRequired -> header.server_epoch to header.conversation_id
+                        is SnapshotBegin -> header.server_epoch to header.conversation_id
+                        is ChatEvent -> header.server_epoch to header.conversation_id
+                        else -> error("도달할 수 없는 헤더")
+                    }
+                    chatActions.baseState(epoch, conversation, false)
+                    publishDraft()
+                }
                 when (header) {
                     is ResyncRequired -> { headerEpoch = header.server_epoch; headerConversation = header.conversation_id; pendingSyncHeaders++ }
                     is SnapshotBegin -> { headerEpoch = header.server_epoch; headerConversation = header.conversation_id; pendingSyncHeaders++ }
@@ -411,17 +488,26 @@ class ConnectionRepository(
                 record.mediaCurrent.set(false)
                 extensions?.shutdown()
                 character?.shutdown()
+                chatActions.disconnected()
+                publishDraft()
             }) { frame ->
                 if (frame is ErrorMessage) throw ConnectionException(frame.code)
                 val needsSync = withContext(decodeDispatcher) { session.consume(frame) }
                 if (frame is ResyncRequired || frame is SnapshotBegin) pendingSyncHeaders--
-                if (needsSync && !socket.send(drafts.syncRequest(credentials, session))) throw ConnectionException("connection_closed")
-                if (frame is RequestStatus) drafts.status(frame)
+                if (frame is ResyncRequired || frame is SnapshotBegin || frame is ChatEvent) record.pendingBaseHeaders--
+                if (record.pendingBaseHeaders > 0) chatActions.baseState(headerEpoch, headerConversation, false)
+                else chatActions.baseState(session.serverEpoch, session.conversationId, !session.syncing)
+                if (needsSync && !socket.send(syncRequest(record))) throw ConnectionException("connection_closed")
+                if (frame is RequestStatus) {
+                    if (chatActions.hasPending) chatActions.receiveStatus(frame) else drafts.status(frame)
+                }
                 if (session.syncing) { show(ConnectionPhase.SYNCING); stage(ConnectionStage.INITIAL_SYNC) }
                 else session.snapshot?.let { snapshot ->
                     stage(ConnectionStage.CONNECTED)
                     mutableState.value = mutableState.value.copy(phase = ConnectionPhase.CONNECTED,
                         messages = snapshot.messages, processing = snapshot.processing, errorCode = null)
+                    chatActions.snapshot(snapshot)
+                    if (record.pendingBaseHeaders > 0) chatActions.baseState(headerEpoch, headerConversation, false)
                     drafts.synchronized(snapshot)?.let {
                         active?.responseDeadline = nowMillis() + 10_000
                         if (!socket.send(it)) throw ConnectionException("connection_closed")
@@ -435,7 +521,7 @@ class ConnectionRepository(
                     extensions?.baseState(session.serverEpoch, session.conversationId, !session.syncing)
                     character?.baseState(session.serverEpoch, session.conversationId, !session.syncing)
                 }
-                publishDraft()
+                pumpChatActions(record)
             }
         } catch (error: ConnectionException) {
             throw authenticatedSessionFailure(error.code)
@@ -449,6 +535,8 @@ class ConnectionRepository(
             closing?.extensions?.closeAndJoin()
             closing?.character?.closeAndJoin()
             if (active === closing) active = null
+            chatActions.disconnected()
+            publishDraft()
             socket.cancel()
         }
     }

@@ -14,6 +14,14 @@ internal class ConversationSession(ready: Ready, private val nowMillis: () -> Lo
         private set
     private var assembler = SnapshotAssembler(serverEpoch, conversationId, nowMillis)
     private var waitingSince = nowMillis()
+    private var refreshPending = false
+
+    fun beginRefresh() {
+        refreshPending = true
+        if (!syncing) invalidate()
+    }
+
+    fun finishRefresh() { refreshPending = false }
 
     fun checkTimeout() {
         if (!syncing) return
@@ -38,6 +46,8 @@ internal class ConversationSession(ready: Ready, private val nowMillis: () -> Lo
         when (frame) {
             is ResyncRequired -> return invalidate(frame.server_epoch, frame.conversation_id)
             is SnapshotBegin, is SnapshotPart, is SnapshotEnd -> {
+                // 완료 전 캡처가 먼저 끝나도 명시적 refresh의 다음 캡처를 받는다.
+                if (frame is SnapshotBegin && refreshPending && !syncing) invalidate()
                 if (!syncing) return false
                 val completed = assembler.consume(frame) ?: return false
                 val previous = snapshot
