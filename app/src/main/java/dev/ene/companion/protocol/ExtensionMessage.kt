@@ -14,6 +14,48 @@ sealed class ExtensionMessage : WireMessage() {
 
 data class ExtensionContext(val registrationGeneration: Long, val serverEpoch: String, val connectionGeneration: String, val conversationId: String)
 
+@Serializable @SerialName("chat_actions_request")
+data class ChatActionsRequest(
+    override val registration_generation: Long,
+    override val server_epoch: String,
+    override val connection_generation: String,
+    val conversation_id: String,
+    val query_id: String,
+    val refresh: Boolean,
+) : ExtensionMessage()
+
+@Serializable @SerialName("chat_actions_state")
+data class ChatActionsState(
+    override val registration_generation: Long,
+    override val server_epoch: String,
+    override val connection_generation: String,
+    val conversation_id: String,
+    val conversation_revision: Long,
+    val event_seq: Long,
+    val state_seq: Long,
+    val user_message_id: String? = null,
+    val assistant_message_id: String? = null,
+    val edit_allowed: Boolean,
+    val edit_reason: String,
+    val reroll_allowed: Boolean,
+    val reroll_reason: String,
+    val query_id: String? = null,
+    val snapshot_id: String? = null,
+) : ExtensionMessage()
+
+@Serializable @SerialName("chat_action")
+data class ChatAction(
+    override val registration_generation: Long,
+    override val server_epoch: String,
+    override val connection_generation: String,
+    val conversation_id: String,
+    val request_id: String,
+    val kind: String,
+    val target_message_id: String,
+    val expected_revision: Long,
+    val text: String? = null,
+) : ExtensionMessage()
+
 @Serializable @SerialName("extensions_ready")
 data class ExtensionsReady(
     override val registration_generation: Long,
