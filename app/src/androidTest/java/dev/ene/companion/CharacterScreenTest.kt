@@ -18,21 +18,21 @@ class CharacterScreenTest {
     @get:Rule val compose = createComposeRule()
 
     @Test fun collapsedAndSyncingSurfaceKeepsViewUntilRetryOrShutdown() {
-        var height by mutableStateOf(180)
+        var shown by mutableStateOf(true)
         var state by mutableStateOf(CharacterViewState("ready", retainRenderer = true, presentationAllowed = true))
         var creations = 0
         var releases = 0
         var view: View? = null
         compose.setContent { MaterialTheme {
-            CharacterSurface(state, true, height, { context -> View(context).also { creations++; view = it } }, { releases++ })
+            CharacterSurface(state, true, shown, { context -> View(context).also { creations++; view = it } }, { releases++ })
         } }
-        compose.runOnIdle { assertEquals(1, creations); height = 0 }
+        compose.runOnIdle { assertEquals(1, creations); shown = false }
         compose.runOnIdle {
             assertEquals(0, releases); assertEquals(View.INVISIBLE, view!!.visibility)
             assertEquals(View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS, view!!.importantForAccessibility)
             state = state.copy(presentationAllowed = false)
         }
-        compose.runOnIdle { height = 180; state = state.copy(presentationAllowed = true) }
+        compose.runOnIdle { shown = true; state = state.copy(presentationAllowed = true) }
         compose.runOnIdle {
             assertEquals(1, creations); assertEquals(0, releases); assertEquals(View.VISIBLE, view!!.visibility)
             state = state.copy(viewGeneration = 1)
@@ -43,14 +43,14 @@ class CharacterScreenTest {
 
     @Test fun renderFailureOffersExplicitRetryWithoutReconnectingChat() {
         var retries = 0
-        compose.setContent { MaterialTheme { CharacterStatus(CharacterViewState("error", "character_renderer_gone"), false) { retries++ } } }
+        compose.setContent { MaterialTheme { CharacterStatus(CharacterViewState("error", "character_renderer_gone")) { retries++ } } }
         compose.onNodeWithText("캐릭터를 표시하지 못했습니다. 채팅과 음성은 계속 사용할 수 있습니다.").assertIsDisplayed()
         compose.onNodeWithText("캐릭터 다시 불러오기").performClick()
         compose.runOnIdle { assertEquals(1, retries) }
     }
 
-    @Test fun collapsedCharacterExplainsWhyMessageInputTakesPriority() {
-        compose.setContent { MaterialTheme { CharacterStatus(CharacterViewState("ready"), true) {} } }
-        compose.onNodeWithText("입력 공간을 확보하기 위해 캐릭터 화면을 접었습니다.").assertIsDisplayed()
+    @Test fun loadingCharacterKeepsItsStatusReachable() {
+        compose.setContent { MaterialTheme { CharacterStatus(CharacterViewState("loading")) {} } }
+        compose.onNodeWithText("PC의 캐릭터를 가져오고 있습니다.").assertIsDisplayed()
     }
 }

@@ -13,6 +13,8 @@ import dev.ene.companion.audio.AndroidAudioPlatform
 import dev.ene.companion.character.CharacterPlatform
 import dev.ene.companion.character.CharacterPlacementController
 import dev.ene.companion.storage.CharacterPlacementStore
+import dev.ene.companion.storage.ChatLayoutStore
+import dev.ene.companion.presentation.ChatLayoutController
 import kotlinx.coroutines.*
 
 /** 화면 회전과 별개인 앱 수명의 연결 하나만 유지한다. */
@@ -20,10 +22,13 @@ class EneApplication : Application(), DefaultLifecycleObserver {
     private val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     lateinit var connection: ConnectionRepository
         private set
+    lateinit var chatLayout: ChatLayoutController
+        private set
 
     override fun onCreate() {
         super<Application>.onCreate()
         val startedMillis = System.currentTimeMillis()
+        chatLayout = ChatLayoutController(ChatLayoutStore(this), applicationScope)
         connection = ConnectionRepository(TokenStore(this), ConnectionSettingsStore(this),
             discovery = androidPcDiscovery(this),
             audioPlatform = AndroidAudioPlatform(this), characterPlatform = CharacterPlatform.android(this),
@@ -35,5 +40,5 @@ class EneApplication : Application(), DefaultLifecycleObserver {
         }
     }
     override fun onStart(owner: LifecycleOwner) { connection.foreground(true) }
-    override fun onStop(owner: LifecycleOwner) { connection.foreground(false) }
+    override fun onStop(owner: LifecycleOwner) { chatLayout.finishAdjustment(); connection.foreground(false) }
 }

@@ -1,63 +1,144 @@
 package dev.ene.companion.ui
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.semantics.LiveRegionMode
-import androidx.compose.ui.semantics.liveRegion
-import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.semantics.*
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.ene.companion.connection.*
+import dev.ene.companion.presentation.*
+import kotlin.math.roundToInt
 
-/** 텍스트는 Repository 메모리만 사용한다. 화면 복원이나 파일에 대화를 남기지 않는다. */
+/** 대화와 초안은 메모리에만 둔다. 화면 설정만 별도 로컬 파일에 저장한다. */
 @Composable
-fun ConnectionScreen(repository: ConnectionRepository) {
+fun ConnectionScreen(repository: ConnectionRepository, layoutController: ChatLayoutController) {
     val state by repository.state.collectAsStateWithLifecycle()
+    val character by repository.characterState.collectAsStateWithLifecycle()
+    val placement by repository.characterPlacement.collectAsStateWithLifecycle()
+    val layout by layoutController.state.collectAsStateWithLifecycle()
     var camera by remember { mutableStateOf(false) }
     var dialog by remember { mutableStateOf<String?>(null) }
+    var placementOpen by remember { mutableStateOf(false) }
     var host by remember { mutableStateOf("") }
     var port by remember { mutableStateOf("8765") }
-    Scaffold { padding ->
-        if (camera) PairingCameraScreen(Modifier.padding(padding), onQr = { camera = false; repository.pair(it) }, onClose = { camera = false })
-        else Column(Modifier.fillMaxSize().padding(padding).imePadding().padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("ENE 동반 앱", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.padding(top = 12.dp))
-            ConnectionStatus(state)
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = { if (state.registered) dialog = "pair" else camera = true }, modifier = Modifier.heightIn(min = 48.dp)) { Text("QR 연결") }
-                if (state.registered) OutlinedButton(onClick = {
-                    host = state.endpoint?.host.orEmpty(); port = (state.endpoint?.port ?: 8765).toString(); dialog = "address"
-                }, modifier = Modifier.heightIn(min = 48.dp)) { Text("주소 수정") }
-                TextButton(onClick = { dialog = "forget" }, modifier = Modifier.heightIn(min = 48.dp)) { Text("등록 해제") }
-                TextButton(onClick = { dialog = "diagnostics" }, modifier = Modifier.heightIn(min = 48.dp)) { Text("연결 진단") }
+    val keyboard = LocalSoftwareKeyboardController.current
+    val focus = LocalFocusManager.current
+    val openPlacement: () -> Unit = { keyboard?.hide(); focus.clearFocus(); placementOpen = true }
+    val openPairing: () -> Unit = { keyboard?.hide(); focus.clearFocus(); if (state.registered) dialog = "pair" else camera = true }
+    DisposableEffect(layoutController) { onDispose { layoutController.finishAdjustment() } }
+
+    Box(Modifier.fillMaxSize()) {
+        OverlayChatLayout(layout, layoutController::change, layoutController::finishAdjustment,
+            modifier = Modifier.semantics { if (camera) hideFromAccessibility() },
+            scene = { CharacterScene(repository, state.phase == ConnectionPhase.CONNECTED && !camera) },
+            toolbar = {
+                CompanionToolbar(connectionHeading(state), state.registered,
+                    state.phase == ConnectionPhase.CONNECTED && character.settings.available && !character.settings.busy,
+                    openPlacement) { action ->
+                    keyboard?.hide(); focus.clearFocus()
+                    when (action) {
+                        "pair" -> openPairing()
+                        "address" -> {
+                            host = state.endpoint?.host.orEmpty()
+                            port = (state.endpoint?.port ?: 8765).toString()
+                            dialog = "address"
+                        }
+                        "character" -> repository.openCharacterSettings()
+                        else -> dialog = action
+                    }
+                }
+            }) { compact ->
+            // 상태 버튼은 메뉴를 열지 않아도 보인다. 긴 사유와 복구 버튼은 스크롤 가능한 상세 창에 둔다.
+            val notice = when {
+                state.errorCode != null -> errorDescription(state.errorCode!!)
+                state.phase != ConnectionPhase.CONNECTED -> connectionHeading(state)
+                character.status == "error" -> "캐릭터 표시 실패 · 다시 불러오기"
+                state.diagnostics.storageNotice != null -> storageNoticeDescription()
+                character.status in setOf("loading", "rendering", "refreshing") -> "캐릭터를 준비하고 있습니다"
+                else -> audioOutputDescription(state.audioOutput)
             }
-            if (state.phase == ConnectionPhase.AWAITING_APPROVAL) {
-                TextButton(onClick = { repository.cancelPairing() }, modifier = Modifier.heightIn(min = 48.dp)) { Text("승인 대기 취소") }
-            } else if (state.phase == ConnectionPhase.ACTION_REQUIRED || state.phase == ConnectionPhase.RECONNECTING) {
-                TextButton(onClick = { repository.retry() }, modifier = Modifier.heightIn(min = 48.dp)) { Text("다시 연결") }
+            if (!compact) TextButton(onClick = { dialog = "status" }, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
+                .semantics { contentDescription = "연결·캐릭터·음성 상태 자세히"; liveRegion = LiveRegionMode.Polite },
+                colors = ButtonDefaults.textButtonColors(contentColor = if (state.errorCode != null || character.status == "error")
+                    MaterialTheme.colorScheme.error else Color(0xFFD5DFEA))) {
+                Text(notice, style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
             }
-            CharacterPanel(repository, controlsVisible = state.phase == ConnectionPhase.CONNECTED)
-            ChatHistory(state, Modifier.weight(1f), { repository.openMessageEditor(it) }, { repository.rerollMessage(it) })
-            state.chatActions.notice?.let { Text(chatActionReason(it), style = MaterialTheme.typography.bodySmall) }
-            chatActionCompatibilityNotice(state)?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
-            if (state.chatActions.editor?.open == false && !state.chatActions.busy) {
-                TextButton(onClick = { repository.reopenMessageEditor() }, modifier = Modifier.heightIn(min = 48.dp)) { Text("보관된 편집 초안 보기") }
+            ChatHistory(state, Modifier.weight(1f), repository::openMessageEditor, repository::rerollMessage) {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    state.chatActions.notice?.let { Text(chatActionReason(it), style = MaterialTheme.typography.bodySmall) }
+                    chatActionCompatibilityNotice(state)?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+                    if (state.chatActions.editor?.open == false && !state.chatActions.busy) {
+                        TextButton(onClick = { repository.reopenMessageEditor() }, modifier = Modifier.heightIn(min = 48.dp)) { Text("보관된 편집 초안 보기") }
+                    }
+                    if (layout.saveStatus == "error") {
+                        TextButton(onClick = layoutController::retrySave, modifier = Modifier.heightIn(min = 48.dp)) { Text("대화창 높이 저장 실패 · 재시도") }
+                    } else if (layout.readFailed) {
+                        Text("대화창 높이를 읽지 못해 기본값을 표시합니다. 배치에서 조절하면 다시 저장합니다.", style = MaterialTheme.typography.bodySmall)
+                    }
+                    state.sendState?.let { send ->
+                        Text(when (send) {
+                            "reserved" -> "PC에서 전송을 준비하고 있습니다."
+                            "accepted" -> "PC에 접수되었습니다."
+                            else -> "전송 결과를 확인하고 있습니다."
+                        }, style = MaterialTheme.typography.bodySmall)
+                    }
+                }
             }
-            if (state.sendState != null) Text(when (state.sendState) { "reserved" -> "PC에서 전송을 준비하고 있습니다."; "accepted" -> "PC에 접수되었습니다."; else -> "전송 결과를 확인하고 있습니다." }, style = MaterialTheme.typography.bodySmall)
-            Row(Modifier.fillMaxWidth().padding(bottom = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(state.draft, onValueChange = { repository.editDraft(it) }, label = { Text("메시지") }, modifier = Modifier.weight(1f), maxLines = 4,
-                    supportingText = { Text("입력 내용은 앱이 종료되면 사라집니다.") })
-                Button(onClick = { repository.sendDraft() }, enabled = state.canSend, modifier = Modifier.heightIn(min = 56.dp).padding(top = 8.dp)) { Text("전송") }
+            HorizontalDivider(color = Color.White.copy(alpha = .08f))
+            Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                OutlinedTextField(state.draft, onValueChange = repository::editDraft,
+                    placeholder = { Text("메시지 보내기") }, modifier = Modifier.weight(1f).semantics {
+                        contentDescription = "메시지 · 입력 내용은 앱 종료 시 삭제됩니다"
+                    }, maxLines = if (compact) 1 else 3, shape = RoundedCornerShape(20.dp),
+                    colors = OutlinedTextFieldDefaults.colors(focusedContainerColor = Color(0xFF1B1D22),
+                        unfocusedContainerColor = Color(0xFF1B1D22), focusedTextColor = Color.White, unfocusedTextColor = Color.White))
+                Button(onClick = { repository.sendDraft() }, enabled = state.canSend, modifier = Modifier.heightIn(min = 48.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0071E3), contentColor = Color.White)) { Text("전송") }
             }
         }
+        if (camera) Surface(Modifier.fillMaxSize()) {
+            PairingCameraScreen(Modifier.safeDrawingPadding(), onQr = { camera = false; repository.pair(it) }, onClose = { camera = false })
+        }
     }
+    if (placementOpen) CharacterPlacementSheet(placement, repository::changeCharacterPlacement, repository::finishCharacterPlacement,
+        repository::resetCharacterPlacement, repository::retryCharacterPlacementSave,
+        { repository.finishCharacterPlacement(); layoutController.finishAdjustment(); placementOpen = false }) {
+        ChatHeightSettings(layout, layoutController::change, layoutController::finishAdjustment,
+            layoutController::reset, layoutController::retrySave)
+    }
+    if (character.settings.open) CharacterSettingsSheet(character.settings, repository::closeCharacterSettings,
+        repository::previewCharacterSettings, repository::submitCharacterSettings)
     state.chatActions.editor?.takeIf { it.open }?.let { editor ->
-        MessageEditDialog(editor, { repository.editMessageDraft(it) }, { repository.submitMessageEdit() }, { repository.cancelMessageEditor() })
+        MessageEditDialog(editor, repository::editMessageDraft, { repository.submitMessageEdit() }, repository::cancelMessageEditor)
     }
     when (dialog) {
+        "status" -> AlertDialog(onDismissRequest = { dialog = null }, title = { Text("연결 및 재생 상태") }, text = {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                ConnectionStatus(state)
+                when (state.phase) {
+                    ConnectionPhase.UNREGISTERED -> TextButton(onClick = { dialog = null; openPairing() }) { Text("QR 연결") }
+                    ConnectionPhase.AWAITING_APPROVAL -> TextButton(onClick = { repository.cancelPairing() }) { Text("승인 대기 취소") }
+                    ConnectionPhase.ACTION_REQUIRED, ConnectionPhase.RECONNECTING, ConnectionPhase.PAUSED ->
+                        TextButton(onClick = { repository.retry() }) { Text("다시 연결") }
+                    else -> Unit
+                }
+                if (state.phase == ConnectionPhase.CONNECTED) CharacterStatus(character, repository::retryCharacter)
+                Text("대화와 입력 초안은 앱이 종료되면 사라집니다.", style = MaterialTheme.typography.bodySmall)
+            }
+        }, confirmButton = { TextButton(onClick = { dialog = null }) { Text("닫기") } })
         "diagnostics" -> ConnectionDiagnosticsDialog(state.diagnostics) { dialog = null }
         "pair" -> AlertDialog(onDismissRequest = { dialog = null }, title = { Text("새 QR로 연결할까요?") },
             text = { Text("새 연결에는 PC 승인이 필요합니다. 승인될 때까지 기존 등록은 보관됩니다.") },
@@ -68,7 +149,7 @@ fun ConnectionScreen(repository: ConnectionRepository) {
             confirmButton = { TextButton(onClick = { dialog = null; repository.forget() }) { Text("등록 해제") } },
             dismissButton = { TextButton(onClick = { dialog = null }) { Text("취소") } })
         "address" -> AlertDialog(onDismissRequest = { dialog = null }, title = { Text("PC 접속 주소") }, text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("주소만 바꿉니다. PC 인증서는 바꾸지 않습니다.")
                 OutlinedTextField(host, { host = it }, label = { Text("주소") }, singleLine = true)
                 OutlinedTextField(port, { port = it }, label = { Text("포트") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
@@ -76,6 +157,37 @@ fun ConnectionScreen(repository: ConnectionRepository) {
         }, confirmButton = { TextButton(onClick = { repository.updateAddress(host, port.toIntOrNull() ?: 0); dialog = null }) { Text("저장 후 연결") } },
             dismissButton = { TextButton(onClick = { dialog = null }) { Text("취소") } })
     }
+}
+
+@Composable
+internal fun ChatHeightSettings(state: ChatLayoutState, onChange: (Float) -> Unit, onFinish: () -> Unit,
+                                onReset: () -> Unit, onRetry: () -> Unit) {
+    val percent = (state.layout.heightFraction * 100).roundToInt()
+    Text("대화창 높이 · ${percent}%", style = MaterialTheme.typography.labelLarge)
+    Slider(state.layout.heightFraction, onValueChange = onChange, onValueChangeFinished = onFinish,
+        valueRange = ChatLayout.MIN_FRACTION..ChatLayout.MAX_FRACTION, enabled = state.loaded,
+        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).semantics { contentDescription = "대화창 높이 설정"; stateDescription = "${percent}%" })
+    Text(when {
+        !state.loaded -> "저장된 대화창 높이를 불러오는 중입니다."
+        state.saveStatus == "error" -> "높이를 저장하지 못했습니다. 마지막 저장값은 유지됩니다."
+        state.saveStatus in setOf("dirty", "saving") -> "높이 저장 중…"
+        state.readFailed -> "높이를 읽지 못해 기본값을 표시합니다. 직접 조절하거나 기본 높이를 복원하면 다시 저장합니다."
+        else -> "높이 저장됨 · 키보드와 작은 화면에서는 표시 높이만 자동 보정됩니다."
+    }, style = MaterialTheme.typography.bodySmall, modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite })
+    if (state.saveStatus == "error") TextButton(onClick = onRetry, modifier = Modifier.heightIn(min = 48.dp)) { Text("높이 저장 재시도") }
+    TextButton(onClick = onReset, enabled = state.loaded, modifier = Modifier.heightIn(min = 48.dp)) { Text("기본 대화창 높이 복원") }
+    HorizontalDivider()
+}
+
+internal fun connectionHeading(state: ConnectionViewState): String = when (state.phase) {
+    ConnectionPhase.UNREGISTERED -> "PC 연결 필요"
+    ConnectionPhase.CONNECTING -> "연결 중"
+    ConnectionPhase.AWAITING_APPROVAL -> "PC 승인 대기"
+    ConnectionPhase.SYNCING -> "대화 동기화 중"
+    ConnectionPhase.CONNECTED -> "암호화 연결됨"
+    ConnectionPhase.RECONNECTING -> "재연결 중"
+    ConnectionPhase.PAUSED -> "연결 일시 중지"
+    ConnectionPhase.ACTION_REQUIRED -> "연결 확인 필요"
 }
 
 @Composable

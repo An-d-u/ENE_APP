@@ -5,10 +5,10 @@ import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.activity.SystemBarStyle
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.lightColorScheme
+import androidx.compose.ui.graphics.Color
 import dev.ene.companion.ui.ConnectionScreen
 
 class MainActivity : ComponentActivity() {
@@ -18,6 +18,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onPause() {
+        (application as EneApplication).chatLayout.finishAdjustment()
         (application as EneApplication).connection.activityResumed(false, isChangingConfigurations)
         super.onPause()
     }
@@ -26,10 +27,13 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         // 최근 앱 미리보기·시스템 캡처에 대화와 QR이 남지 않도록 한다.
         window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
-        enableEdgeToEdge()
+        enableEdgeToEdge(statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
+            navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT))
         setContent {
-            MaterialTheme(colorScheme = if (isSystemInDarkTheme()) darkColorScheme() else lightColorScheme()) {
-                ConnectionScreen((application as EneApplication).connection)
+            MaterialTheme(colorScheme = darkColorScheme(primary = Color(0xFF91C5FF),
+                surface = Color(0xFF1B1D22), background = Color(0xFF111214))) {
+                val app = application as EneApplication
+                ConnectionScreen(app.connection, app.chatLayout)
             }
         }
     }

@@ -6,9 +6,12 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
@@ -55,6 +58,8 @@ fun ChatMessageActions(id: String, role: String, state: ChatActionsViewState, on
     val reason = if (kind == "edit") state.editReason else state.rerollReason
     Column {
         TextButton(onClick = { if (kind == "edit") onEdit(id) else onReroll(id) }, enabled = enabled,
+            colors = ButtonDefaults.textButtonColors(contentColor = LocalContentColor.current,
+                disabledContentColor = LocalContentColor.current.copy(alpha = .6f)),
             modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp)) {
             Text(if (kind == "edit") "수정" else "리롤")
         }
@@ -64,32 +69,38 @@ fun ChatMessageActions(id: String, role: String, state: ChatActionsViewState, on
 
 /** 동일 ID의 답변 교체에서도 기존 스크롤 위치와 마지막 진행 항목을 유지한다. */
 @Composable
-fun ChatHistory(state: ConnectionViewState, modifier: Modifier = Modifier, onEdit: (String) -> Unit, onReroll: (String) -> Unit) {
+fun ChatHistory(state: ConnectionViewState, modifier: Modifier = Modifier, onEdit: (String) -> Unit, onReroll: (String) -> Unit,
+                footer: @Composable () -> Unit = {}) {
     val listState = rememberLazyListState()
     val nearEnd by remember { derivedStateOf { !listState.canScrollForward } }
     val progress = chatActionProgress(state.chatActions, state.processing.phase)
     LaunchedEffect(state.messages.lastOrNull()?.id, state.chatActions.busy, progress) {
-        if (nearEnd && state.messages.isNotEmpty()) listState.scrollToItem(state.messages.lastIndex + if (progress != null) 1 else 0)
+        if (nearEnd && state.messages.isNotEmpty()) listState.scrollToItem(state.messages.size + if (progress != null) 1 else 0)
     }
     LazyColumn(modifier.fillMaxWidth(), state = listState, verticalArrangement = Arrangement.spacedBy(8.dp),
-        contentPadding = PaddingValues(vertical = 8.dp)) {
+        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)) {
         if (state.messages.isEmpty()) item {
             Text(if (state.phase == ConnectionPhase.CONNECTED) "아직 표시할 대화가 없습니다." else "PC ENE를 실행하고 같은 Wi-Fi에서 연결해 주세요.", style = MaterialTheme.typography.bodyMedium)
         }
         items(state.messages, key = { it.id }) { message ->
-            Surface(color = if (message.role == "user") MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainer,
-                shape = MaterialTheme.shapes.medium) {
-                Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            val user = message.role == "user"
+            Box(Modifier.fillMaxWidth(), contentAlignment = if (user) Alignment.CenterEnd else Alignment.CenterStart) {
+              Surface(color = if (user) ChatUserColor else ChatAssistantColor,
+                contentColor = if (user) Color.White else Color(0xFF111827),
+                modifier = Modifier.widthIn(max = 560.dp).fillMaxWidth(.88f), shape = RoundedCornerShape(18.dp)) {
+                Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text(if (message.role == "user") "나" else "ENE", style = MaterialTheme.typography.labelMedium)
                     Text(message.text, style = MaterialTheme.typography.bodyLarge)
                     if (message.attachment_unsupported == true) Text("첨부 내용은 PC에서 확인해 주세요.", style = MaterialTheme.typography.bodySmall)
                     ChatMessageActions(message.id, message.role, state.chatActions, onEdit, onReroll)
                 }
+              }
             }
         }
         if (progress != null) item(key = "chat-action-progress") {
             Text(progress, Modifier.semantics { liveRegion = LiveRegionMode.Polite }, style = MaterialTheme.typography.bodyMedium)
         }
+        item(key = "chat-notices") { footer() }
     }
 }
 

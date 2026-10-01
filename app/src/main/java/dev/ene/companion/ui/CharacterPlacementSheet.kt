@@ -14,21 +14,24 @@ import kotlin.math.roundToInt
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CharacterPlacementSheet(state: CharacterPlacementState, onChange: (CharacterPlacement) -> Unit,
-                            onFinish: () -> Unit, onReset: () -> Unit, onRetry: () -> Unit, onClose: () -> Unit) {
+                            onFinish: () -> Unit, onReset: () -> Unit, onRetry: () -> Unit, onClose: () -> Unit,
+                            extraContent: @Composable ColumnScope.() -> Unit = {}) {
     ModalBottomSheet(onDismissRequest = onClose, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
-        CharacterPlacementContent(state, onChange, onFinish, onReset, onRetry, onClose)
+        CharacterPlacementContent(state, onChange, onFinish, onReset, onRetry, onClose, extraContent)
     }
 }
 
 @Composable
 internal fun CharacterPlacementContent(state: CharacterPlacementState, onChange: (CharacterPlacement) -> Unit,
-                                       onFinish: () -> Unit, onReset: () -> Unit, onRetry: () -> Unit, onClose: () -> Unit) {
+                                       onFinish: () -> Unit, onReset: () -> Unit, onRetry: () -> Unit, onClose: () -> Unit,
+                                       extraContent: @Composable ColumnScope.() -> Unit = {}) {
     val scaleRange = (CharacterPlacementLimits.MIN_SCALE * 100).toFloat()..(CharacterPlacementLimits.MAX_SCALE * 100).toFloat()
     val positionRange = CharacterPlacementLimits.MIN_POSITION.toFloat()..CharacterPlacementLimits.MAX_POSITION.toFloat()
     Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp).navigationBarsPadding()) {
         Text("휴대폰 표시 설정", style = MaterialTheme.typography.titleLarge)
         Column(Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text("이 휴대폰에 자동 저장됩니다. PC의 크기·위치와 움직임 설정은 바꾸지 않습니다.", style = MaterialTheme.typography.bodyMedium)
+            extraContent()
             Text("확대 후 가로·세로 위치로 보고 싶은 부분을 맞출 수 있습니다. 중심은 화면 밖으로도 이동합니다.", style = MaterialTheme.typography.bodyMedium)
             PlacementSlider("캐릭터 크기", state.placement.scale * 100, scaleRange, state.loaded,
                 { onChange(state.placement.copy(scale = it / 100)) }, onFinish)
