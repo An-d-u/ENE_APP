@@ -75,7 +75,8 @@ fun ConnectionScreen(repository: ConnectionRepository, layoutController: ChatLay
                     MaterialTheme.colorScheme.error else Color(0xFFD5DFEA))) {
                 Text(notice, style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
             }
-            ChatHistory(state, Modifier.weight(1f), repository::openMessageEditor, repository::rerollMessage) {
+            ChatHistory(state, Modifier.weight(1f), repository::openMessageEditor, repository::rerollMessage,
+                repository::visibleThoughts, repository::retryThought) {
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     state.chatActions.notice?.let { Text(chatActionReason(it), style = MaterialTheme.typography.bodySmall) }
                     chatActionCompatibilityNotice(state)?.let { Text(it, style = MaterialTheme.typography.bodySmall) }

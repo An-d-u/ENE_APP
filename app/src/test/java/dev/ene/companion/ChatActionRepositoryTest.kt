@@ -49,7 +49,7 @@ class ChatActionRepositoryTest {
         val transport = ChatTransport(); val repo = repo(transport)
         try {
             initialize(repo, transport)
-            assertEquals(listOf("chat_actions_v1"), transport.socket.sent.filterIsInstance<Hello>().single().capabilities)
+            assertEquals(listOf("chat_actions_v1", "message_thoughts_v1"), transport.socket.sent.filterIsInstance<Hello>().single().capabilities)
             repo.editDraft("가상 별도의 새 초안")
             repo.openMessageEditor(id(5)); repo.editMessageDraft("가상 편집 초안")
             repo.submitMessageEdit(); repo.submitMessageEdit(); repo.rerollMessage(id(6)); repo.sendDraft(); runCurrent()

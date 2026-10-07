@@ -66,7 +66,7 @@ class AudioRepositoryTest {
         try {
             repo.activityResumed(true)
             repo.foreground(true); runCurrent()
-            assertEquals(listOf("chat_actions_v1", "audio_pcm_v1"), transport.socket.sent.filterIsInstance<Hello>().single().capabilities)
+            assertEquals(listOf("chat_actions_v1", "message_thoughts_v1", "audio_pcm_v1"), transport.socket.sent.filterIsInstance<Hello>().single().capabilities)
             transport.socket.offer(ExtensionsReady(1, audioId(1), audioId(2), listOf("audio_pcm_v1")))
             val message = SessionFixtures.message().copy(id = audioId(4), role = "assistant")
             SessionFixtures.frames(listOf(message), epoch = audioId(1), conversation = audioId(3)).forEach(transport.socket::offer)

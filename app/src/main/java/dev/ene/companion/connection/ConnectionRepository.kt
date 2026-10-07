@@ -46,6 +46,7 @@ class ConnectionRepository(
     private var connection: Job? = null
     private var drafts = DraftOutbox()
     private val chatActions = ChatActionState(nowMillis)
+    private var visibleThoughtIds = emptyList<String>()
     private class Active(val credentials: DeviceCredentials, val session: ConversationSession, val socket: CompanionSocket) {
         var responseDeadline: Long? = null
         var pendingBaseHeaders = 0
@@ -53,6 +54,7 @@ class ConnectionRepository(
         var extensions: ExtensionSession? = null
         var character: CharacterSession? = null
         var characterLocalGeneration = -1L
+        var thoughts: ThoughtState? = null
     }
     private var active: Active? = null
 
@@ -105,6 +107,26 @@ class ConnectionRepository(
     fun closeCharacterSettings() { active?.character?.closeSettings() }
     fun previewCharacterSettings(key: String, value: JsonElement, parameter: Boolean) { active?.character?.previewSettings(key, value, parameter) }
     fun submitCharacterSettings() { active?.character?.submitSettings() }
+
+    fun visibleThoughts(ids: List<String>): Job = command {
+        visibleThoughtIds = ids.distinct().take(32)
+        active?.thoughts?.visible(visibleThoughtIds)
+        publishThoughts()
+    }
+
+    fun retryThought(id: String): Job = command { active?.thoughts?.retry(id); publishThoughts() }
+
+    private fun publishThoughts() {
+        mutableState.value = mutableState.value.copy(thoughts = active?.thoughts?.entries ?: emptyMap())
+    }
+
+    private fun pumpThoughts(record: Active) {
+        val thoughts = record.thoughts ?: return
+        if (!record.mediaCurrent.get() || record.session.syncing || record.pendingBaseHeaders > 0) return
+        record.session.snapshot?.let(thoughts::synchronize)
+        thoughts.nextRequest()?.let { if (!record.socket.send(it)) throw ConnectionException("connection_closed") }
+        publishThoughts()
+    }
 
     fun editDraft(text: String): Job = command { drafts.edit(text); publishDraft() }
     fun sendDraft(): Job = command {
@@ -395,6 +417,7 @@ class ConnectionRepository(
         try {
             val requested = buildList {
                 add("chat_actions_v1")
+                add("message_thoughts_v1")
                 if (audioPlatform != null && transport.supportsAudio) add("audio_pcm_v1")
                 if (characterPlatform?.supported == true && transport.supportsCharacter) {
                     add("character_v1"); add("character_controls_v1")
@@ -411,7 +434,9 @@ class ConnectionRepository(
                 audioOutput = AudioOutputStatus(reason = if ("audio_pcm_v1" in ready.capabilities) "syncing" else "audio_not_negotiated"))
             val session = ConversationSession(ready, nowMillis)
             val record = Active(credentials, session, socket)
+            record.thoughts = ThoughtState(ready, nowMillis).also { it.visible(visibleThoughtIds) }
             active = record
+            publishThoughts()
             chatActions.connected(CharacterRepository.identity(credentials), ready)
             val character = characterPlatform?.takeIf { "character_v1" in ready.capabilities }?.let { platform ->
                 CharacterSession(ready, CharacterRepository.identity(credentials), CoroutineScope(currentCoroutineContext()), platform,
@@ -451,12 +476,15 @@ class ConnectionRepository(
             exchangeSession(socket, nowMillis, {
                 session.checkTimeout()
                 pumpChatActions(record)
+                pumpThoughts(record)
                 val current = requireNotNull(active)
                 if (!session.syncing && (drafts.awaitingResult || chatActions.awaitingResult)) {
                     val deadline = current.responseDeadline ?: (nowMillis() + 10_000).also { current.responseDeadline = it }
                     if (nowMillis() >= deadline) throw ConnectionException("request_status_timeout")
                 } else current.responseDeadline = null
             }, onExtension = {
+                record.thoughts?.receive(it)
+                publishThoughts()
                 when (it) {
                     is ExtensionsReady -> chatActions.ready(it)
                     is ChatActionsState -> chatActions.receiveState(it)
@@ -465,6 +493,10 @@ class ConnectionRepository(
                 publishDraft()
                 extensions?.receive(it); character?.receive(it)
             }, onBaseHeader = { header ->
+                if (header is ResyncRequired || header is SnapshotBegin || (header is ChatEvent && header.op == "append")) {
+                    record.thoughts?.pause()
+                    publishThoughts()
+                }
                 if (header is ResyncRequired || header is SnapshotBegin || header is ChatEvent) {
                     record.pendingBaseHeaders++
                     val (epoch, conversation) = when (header) {
@@ -487,6 +519,8 @@ class ConnectionRepository(
                 }
             }, onClosed = {
                 record.mediaCurrent.set(false)
+                record.thoughts?.pause()
+                publishThoughts()
                 extensions?.shutdown()
                 character?.shutdown()
                 chatActions.disconnected()
@@ -523,6 +557,7 @@ class ConnectionRepository(
                     character?.baseState(session.serverEpoch, session.conversationId, !session.syncing)
                 }
                 pumpChatActions(record)
+                pumpThoughts(record)
             }
         } catch (error: ConnectionException) {
             throw authenticatedSessionFailure(error.code)
@@ -536,6 +571,7 @@ class ConnectionRepository(
             closing?.extensions?.closeAndJoin()
             closing?.character?.closeAndJoin()
             if (active === closing) active = null
+            publishThoughts()
             chatActions.disconnected()
             publishDraft()
             socket.cancel()

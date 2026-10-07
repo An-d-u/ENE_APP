@@ -48,7 +48,7 @@ class ChatActionsTlsTest {
                 override fun onMessage(webSocket: WebSocket, text: String) {
                     when (val message = ProtocolCodec.decode(text)) {
                         is Hello -> {
-                            assertEquals(listOf("chat_actions_v1"), message.capabilities)
+            assertEquals(listOf("chat_actions_v1", "message_thoughts_v1"), message.capabilities)
                             send(webSocket, Ready(serverId, epoch, conversation, 1, message.capabilities))
                             send(webSocket, ExtensionsReady(1, epoch, id(40), message.capabilities))
                         }

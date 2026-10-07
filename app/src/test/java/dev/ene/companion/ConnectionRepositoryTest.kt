@@ -190,7 +190,7 @@ class ConnectionRepositoryTest {
             repo.foreground(true); runCurrent()
             assertEquals(2, transport.probed.size)
             assertEquals(listOf(Endpoint.parse("192.0.2.2", 8765) to registration.token), transport.opened)
-            assertEquals(listOf(Hello(listOf("chat_actions_v1")), SyncRequest()), transport.socket.sent)
+            assertEquals(listOf(Hello(listOf("chat_actions_v1", "message_thoughts_v1")), SyncRequest()), transport.socket.sent)
             assertEquals(ConnectionPhase.SYNCING, repo.state.value.phase)
             assertFalse(repo.state.value.canSend)
         } finally { repo.close(); runCurrent(); assertTrue(transport.closed) }

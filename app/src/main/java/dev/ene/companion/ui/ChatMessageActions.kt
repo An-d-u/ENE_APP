@@ -17,6 +17,7 @@ import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import dev.ene.companion.connection.*
+import kotlinx.coroutines.flow.distinctUntilChanged
 
 internal fun chatActionCompatibilityNotice(state: ConnectionViewState): String? =
     if (state.phase == ConnectionPhase.CONNECTED && !state.chatActions.supported)
@@ -70,10 +71,17 @@ fun ChatMessageActions(id: String, role: String, state: ChatActionsViewState, on
 /** 동일 ID의 답변 교체에서도 기존 스크롤 위치와 마지막 진행 항목을 유지한다. */
 @Composable
 fun ChatHistory(state: ConnectionViewState, modifier: Modifier = Modifier, onEdit: (String) -> Unit, onReroll: (String) -> Unit,
+                onVisibleThoughts: (List<String>) -> Unit = {}, onRetryThought: (String) -> Unit = {},
                 footer: @Composable () -> Unit = {}) {
     val listState = rememberLazyListState()
     val nearEnd by remember { derivedStateOf { !listState.canScrollForward } }
     val progress = chatActionProgress(state.chatActions, state.processing.phase)
+    val visibleCallback by rememberUpdatedState(onVisibleThoughts)
+    LaunchedEffect(listState) {
+        snapshotFlow { listState.layoutInfo.visibleItemsInfo.mapNotNull { it.key as? String } }
+            .distinctUntilChanged().collect { visibleCallback(it) }
+    }
+    DisposableEffect(Unit) { onDispose { visibleCallback(emptyList()) } }
     LaunchedEffect(state.messages.lastOrNull()?.id, state.chatActions.busy, progress) {
         if (nearEnd && state.messages.isNotEmpty()) listState.scrollToItem(state.messages.size + if (progress != null) 1 else 0)
     }
@@ -92,6 +100,7 @@ fun ChatHistory(state: ConnectionViewState, modifier: Modifier = Modifier, onEdi
                     Text(if (message.role == "user") "나" else "ENE", style = MaterialTheme.typography.labelMedium)
                     Text(message.text, style = MaterialTheme.typography.bodyLarge)
                     if (message.attachment_unsupported == true) Text("첨부 내용은 PC에서 확인해 주세요.", style = MaterialTheme.typography.bodySmall)
+                    if (!user) MessageThought(state.thoughts[message.id]) { onRetryThought(message.id) }
                     ChatMessageActions(message.id, message.role, state.chatActions, onEdit, onReroll)
                 }
               }

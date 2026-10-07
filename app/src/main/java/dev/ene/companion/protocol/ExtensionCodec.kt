@@ -4,7 +4,8 @@ import kotlinx.serialization.json.*
 
 /** 구문 검사는 순수 함수이며 실제 작업·현재 모델 검사는 해당 조정기가 소유한다. */
 object ExtensionCodec {
-    val capabilities = setOf("audio_pcm_v1", "character_v1", "character_controls_v1", "chat_actions_v1")
+    val capabilities = setOf("audio_pcm_v1", "character_v1", "character_controls_v1", "chat_actions_v1", "message_thoughts_v1")
+    private val thoughtTypes = setOf("thought_request", "thought_response", "thought_invalidated")
     private val chatTypes = setOf("chat_actions_request", "chat_actions_state", "chat_action")
     private val chatReasons = setOf("ready", "no_target", "busy", "ai_unavailable", "unsupported_command", "text_too_large")
     private val audioRefs = listOf("conversation_id", "message_id", "operation_id", "utterance_id")
@@ -12,11 +13,11 @@ object ExtensionCodec {
         "audio_started", "audio_source_end", "audio_progress", "audio_progress_ack", "audio_finished", "audio_cancel")
     private val characterTypes = setOf("character_changed", "character_snapshot_request", "character_action", "character_playback")
     private val controlTypes = setOf("head_pat", "head_pat_state", "character_settings_patch", "character_settings_result")
-    val types = audioTypes + characterTypes + controlTypes + chatTypes + setOf("extensions_ready", "extension_error")
+    val types = audioTypes + characterTypes + controlTypes + chatTypes + thoughtTypes + setOf("extensions_ready", "extension_error")
     private val fromPhone = setOf("audio_availability", "audio_prepared", "audio_rejected", "audio_started", "audio_progress",
-        "audio_finished", "audio_cancel", "character_snapshot_request", "head_pat", "character_settings_patch", "chat_actions_request", "chat_action")
+        "audio_finished", "audio_cancel", "character_snapshot_request", "head_pat", "character_settings_patch", "chat_actions_request", "chat_action", "thought_request")
     private val fromPc = types - fromPhone + "audio_cancel"
-    private val smallTypes = setOf("audio_progress", "audio_progress_ack", "character_playback", "head_pat", "head_pat_state", "chat_actions_request", "chat_actions_state")
+    private val smallTypes = setOf("audio_progress", "audio_progress_ack", "character_playback", "head_pat", "head_pat_state", "chat_actions_request", "chat_actions_state", "thought_request", "thought_invalidated")
     private val boolSettings = setOf("enable_builtin_idle_motion", "enable_auto_eye_blink", "enable_idle_motion",
         "enable_expressive_motion", "enable_expressive_pose_transitions", "enable_idle_synthetic_gestures", "enable_head_pat")
     private val numberSettings = mapOf("idle_motion_strength" to (0.2 to 2.0), "idle_motion_speed" to (0.5 to 2.0),
@@ -93,6 +94,20 @@ object ExtensionCodec {
                 val values = offered.map { choice(it, capabilities) }
                 if (values.distinct().size != values.size || negotiate(values.toSet(), capabilities) != values.toSet()) throw ProtocolException()
                 put("capabilities", JsonArray(values.map(::JsonPrimitive)))
+            }
+            in thoughtTypes -> {
+                put("conversation_id", ProtocolCodec.uuid(body["conversation_id"]))
+                if (kind != "thought_invalidated") {
+                    put("query_id", ProtocolCodec.uuid(body["query_id"]))
+                    put("message_id", ProtocolCodec.uuid(body["message_id"]))
+                    put("conversation_revision", ProtocolCodec.integer(body["conversation_revision"]))
+                }
+                if (kind == "thought_response") {
+                    val status = choice(body["status"], setOf("available", "empty", "stale", "too_large"))
+                    val text = ProtocolCodec.text(body["text"], 8192)
+                    if ((status == "available" && text.isBlank()) || (status != "available" && text.isNotEmpty())) throw ProtocolException()
+                    put("status", status); put("text", text)
+                }
             }
             in chatTypes -> {
                 put("conversation_id", ProtocolCodec.uuid(body["conversation_id"]))
@@ -216,6 +231,7 @@ object ExtensionCodec {
         }
         val negotiated = negotiate(negotiatedCapabilities, capabilities)
         val feature = when (kind) {
+            in thoughtTypes -> "message_thoughts_v1"
             in chatTypes -> "chat_actions_v1"
             in audioTypes -> "audio_pcm_v1"
             in characterTypes -> "character_v1"
