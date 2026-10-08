@@ -80,6 +80,7 @@ fun ConnectionScreen(repository: ConnectionRepository, layoutController: ChatLay
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     state.chatActions.notice?.let { Text(chatActionReason(it), style = MaterialTheme.typography.bodySmall) }
                     chatActionCompatibilityNotice(state)?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+                    chatDisplayNotice(state)?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
                     if (state.chatActions.editor?.open == false && !state.chatActions.busy) {
                         TextButton(onClick = { repository.reopenMessageEditor() }, modifier = Modifier.heightIn(min = 48.dp)) { Text("보관된 편집 초안 보기") }
                     }
@@ -179,6 +180,14 @@ internal fun ChatHeightSettings(state: ChatLayoutState, onChange: (Float) -> Uni
     TextButton(onClick = onReset, enabled = state.loaded, modifier = Modifier.heightIn(min = 48.dp)) { Text("기본 대화창 높이 복원") }
     HorizontalDivider()
 }
+
+internal fun chatDisplayNotice(state: ConnectionViewState): String? =
+    if (state.phase != ConnectionPhase.CONNECTED) null else when (state.chatDisplay.status) {
+        "unsupported" -> "PC ENE를 업데이트하면 PC의 메시지 분할 설정을 함께 사용합니다."
+        "syncing" -> "PC의 대화 표시 설정을 확인하고 있습니다."
+        "error" -> "대화 표시 설정을 확인하지 못했습니다. 마지막 표시를 유지합니다. 화면 복귀 시 다시 확인합니다."
+        else -> null
+    }
 
 internal fun connectionHeading(state: ConnectionViewState): String = when (state.phase) {
     ConnectionPhase.UNREGISTERED -> "PC 연결 필요"

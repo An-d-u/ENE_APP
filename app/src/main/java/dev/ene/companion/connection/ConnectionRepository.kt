@@ -46,6 +46,7 @@ class ConnectionRepository(
     private var connection: Job? = null
     private var drafts = DraftOutbox()
     private val chatActions = ChatActionState(nowMillis)
+    private val chatDisplay = ChatDisplayState(nowMillis)
     private var visibleThoughtIds = emptyList<String>()
     private class Active(val credentials: DeviceCredentials, val session: ConversationSession, val socket: CompanionSocket) {
         var responseDeadline: Long? = null
@@ -82,6 +83,7 @@ class ConnectionRepository(
 
     /** Activity의 Main 콜백에서 즉시 호출한다. 느린 저장 작업의 mutex 뒤로 미루지 않는다. */
     fun activityResumed(value: Boolean, changingConfigurations: Boolean = false) {
+        if (value && !resumedActivity) command { chatDisplay.refresh(); publishChatDisplay() }
         resumedActivity = value
         active?.extensions?.resumed(value, changingConfigurations)
         active?.character?.resumed(value, changingConfigurations)
@@ -126,6 +128,16 @@ class ConnectionRepository(
         record.session.snapshot?.let(thoughts::synchronize)
         thoughts.nextRequest()?.let { if (!record.socket.send(it)) throw ConnectionException("connection_closed") }
         publishThoughts()
+    }
+
+    private fun publishChatDisplay() {
+        mutableState.value = mutableState.value.copy(chatDisplay = chatDisplay.view)
+    }
+
+    private fun pumpChatDisplay(record: Active) {
+        if (!record.mediaCurrent.get()) return
+        chatDisplay.nextRequest()?.let { if (!record.socket.send(it)) throw ConnectionException("connection_closed") }
+        publishChatDisplay()
     }
 
     fun editDraft(text: String): Job = command { drafts.edit(text); publishDraft() }
@@ -210,6 +222,7 @@ class ConnectionRepository(
         stopConnection()
         drafts = DraftOutbox()
         chatActions.forget()
+        chatDisplay.forget()
         val retainedDiagnostics = ConnectionDiagnostics(previousExit = mutableState.value.diagnostics.previousExit)
         mutableState.value = ConnectionViewState(phase = ConnectionPhase.ACTION_REQUIRED, diagnostics = retainedDiagnostics)
         clearCharacterCache()
@@ -418,6 +431,7 @@ class ConnectionRepository(
             val requested = buildList {
                 add("chat_actions_v1")
                 add("message_thoughts_v1")
+                add("chat_display_v1")
                 if (audioPlatform != null && transport.supportsAudio) add("audio_pcm_v1")
                 if (characterPlatform?.supported == true && transport.supportsCharacter) {
                     add("character_v1"); add("character_controls_v1")
@@ -438,6 +452,8 @@ class ConnectionRepository(
             active = record
             publishThoughts()
             chatActions.connected(CharacterRepository.identity(credentials), ready)
+            chatDisplay.connected(CharacterRepository.identity(credentials), ready)
+            publishChatDisplay()
             val character = characterPlatform?.takeIf { "character_v1" in ready.capabilities }?.let { platform ->
                 CharacterSession(ready, CharacterRepository.identity(credentials), CoroutineScope(currentCoroutineContext()), platform,
                     mediaFactory = { context, current -> transport.character(credentials.token, context) { record.mediaCurrent.get() && current() } },
@@ -477,12 +493,15 @@ class ConnectionRepository(
                 session.checkTimeout()
                 pumpChatActions(record)
                 pumpThoughts(record)
+                pumpChatDisplay(record)
                 val current = requireNotNull(active)
                 if (!session.syncing && (drafts.awaitingResult || chatActions.awaitingResult)) {
                     val deadline = current.responseDeadline ?: (nowMillis() + 10_000).also { current.responseDeadline = it }
                     if (nowMillis() >= deadline) throw ConnectionException("request_status_timeout")
                 } else current.responseDeadline = null
             }, onExtension = {
+                chatDisplay.receive(it)
+                publishChatDisplay()
                 record.thoughts?.receive(it)
                 publishThoughts()
                 when (it) {
@@ -524,6 +543,8 @@ class ConnectionRepository(
                 extensions?.shutdown()
                 character?.shutdown()
                 chatActions.disconnected()
+                chatDisplay.disconnected()
+                publishChatDisplay()
                 publishDraft()
             }) { frame ->
                 if (frame is ErrorMessage) throw ConnectionException(frame.code)
@@ -573,6 +594,8 @@ class ConnectionRepository(
             if (active === closing) active = null
             publishThoughts()
             chatActions.disconnected()
+            chatDisplay.disconnected()
+            publishChatDisplay()
             publishDraft()
             socket.cancel()
         }

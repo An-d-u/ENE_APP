@@ -28,6 +28,7 @@ data class ConnectionViewState(
     val audioOutput: AudioOutputStatus = AudioOutputStatus(),
     val chatActions: ChatActionsViewState = ChatActionsViewState(),
     val thoughts: Map<String, ThoughtContent> = emptyMap(),
+    val chatDisplay: ChatDisplayViewState = ChatDisplayViewState(),
 ) {
     val canSend: Boolean get() = phase == ConnectionPhase.CONNECTED && processing.phase == "idle" && sendState == null && !chatActions.busy && draft.isNotBlank()
     override fun toString(): String = "ConnectionViewState(phase=$phase)"
