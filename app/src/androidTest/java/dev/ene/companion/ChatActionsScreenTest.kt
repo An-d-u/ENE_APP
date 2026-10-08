@@ -29,11 +29,11 @@ class ChatActionsScreenTest {
             ChatMessageActions("u", "user", state, { edits++ }, { rerolls++ })
             ChatMessageActions("a", "assistant", state, { edits++ }, { rerolls++ })
         } } }
-        compose.onAllNodesWithText("수정").assertCountEquals(1)
-        compose.onNodeWithText("수정").assertHeightIsAtLeast(48.dp).performClick()
-        compose.onNodeWithText("리롤").performClick()
+        compose.onAllNodesWithContentDescription("수정").assertCountEquals(1)
+        compose.onNodeWithContentDescription("수정").assertHeightIsAtLeast(48.dp).performClick()
+        compose.onNodeWithContentDescription("리롤").performClick()
         compose.runOnIdle { assertEquals(1, edits); assertEquals(1, rerolls); state = actions.copy(canReroll = false, rerollReason = "busy") }
-        compose.onNodeWithText("리롤").assertIsNotEnabled().performClick()
+        compose.onNodeWithContentDescription("리롤").assertIsNotEnabled().performClick()
         compose.runOnIdle { assertEquals(1, edits); assertEquals(1, rerolls) }
     }
 

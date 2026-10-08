@@ -11,6 +11,9 @@ import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.unit.dp
 import dev.ene.companion.character.CharacterViewState
+import dev.ene.companion.connection.ConnectionViewState
+import dev.ene.companion.connection.ChatDisplayViewState
+import dev.ene.companion.protocol.PublicMessage
 import dev.ene.companion.presentation.*
 import dev.ene.companion.ui.*
 import org.junit.Assert.*
@@ -58,6 +61,27 @@ class OverlayChatScreenTest {
         } }
         compose.onNodeWithTag("overlay-chat-panel").performTouchInput { click(Offset(center.x, height - 20f)) }
         compose.runOnIdle { assertEquals(0, touches) }
+    }
+
+    @Test fun displaySettingDoesNotRecreateCharacterOrChangeSceneBounds() {
+        var split by mutableStateOf(false)
+        var creates = 0
+        var scene: View? = null
+        val message = PublicMessage("synthetic-layout", "assistant", "가상 부품 하나.\n가상 부품 둘.", "2030-01-01T00:00:00Z")
+        compose.setContent { MaterialTheme {
+            OverlayChatLayout(ChatLayoutState(loaded = true), {}, {}, scene = {
+                CharacterSurface(CharacterViewState("ready", retainRenderer = true, presentationAllowed = true), true, true,
+                    { context -> View(context).also { scene = it; creates++ } }, {})
+            }, toolbar = { Text("합성 제목") }) {
+                ChatHistory(ConnectionViewState(messages = listOf(message), chatDisplay = ChatDisplayViewState("ready", split)),
+                    Modifier.weight(1f), {}, {})
+            }
+        } }
+        var width = 0
+        var height = 0
+        compose.runOnIdle { width = scene!!.width; height = scene!!.height; split = true }
+        compose.onNodeWithText("가상 부품 하나.").assertExists()
+        compose.runOnIdle { assertEquals(1, creates); assertEquals(width, scene!!.width); assertEquals(height, scene!!.height) }
     }
 
     @Test fun menuRetainsActionsAndDismissesBeforeOpeningDestination() {

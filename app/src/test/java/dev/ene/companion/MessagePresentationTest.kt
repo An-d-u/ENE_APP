@@ -44,4 +44,18 @@ class MessagePresentationTest {
         assertEquals("synthetic-answer", originalMessageId(messageBubbleKey("synthetic-answer", 8, true)))
         assertNull(originalMessageId("chat-notices"))
     }
+
+    @Test fun contentAnchorMapsMiddleParagraphAcrossBothSplitModes() {
+        val text = (0..200).joinToString("\r\n\r\n") { "  가상 항목 $it.  " }
+        val normalized = text.replace("\r\n", "\n")
+        val chunks = splitMessageBubbles(text, true)
+        val starts = messageBubbleOffsets(text, chunks)
+        val position = normalized.indexOf("가상 항목 120.") + 4
+        assertEquals(position - 4, starts[120])
+        assertEquals(120, messageBubbleAtOffset(starts, position))
+        assertEquals(0, messageBubbleAtOffset(messageBubbleOffsets(text, splitMessageBubbles(text, false)), position))
+        assertEquals(120, messageBubbleAtOffset(starts, position))
+        assertEquals(0, messageBubbleAtOffset(starts, 0))
+        assertEquals(chunks.lastIndex, messageBubbleAtOffset(starts, normalized.length))
+    }
 }

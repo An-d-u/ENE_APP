@@ -2,22 +2,25 @@ package dev.ene.companion.ui
 
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import dev.ene.companion.connection.*
+import dev.ene.companion.presentation.*
+import dev.ene.companion.protocol.PublicMessage
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.first
+import kotlin.math.roundToInt
 
 internal fun chatActionCompatibilityNotice(state: ConnectionViewState): String? =
     if (state.phase == ConnectionPhase.CONNECTED && !state.chatActions.supported)
@@ -52,58 +55,113 @@ internal fun chatActionProgress(state: ChatActionsViewState, processing: String)
     else -> null
 }
 
-@Composable
-fun ChatMessageActions(id: String, role: String, state: ChatActionsViewState, onEdit: (String) -> Unit, onReroll: (String) -> Unit) {
-    val kind = messageAction(id, role, state) ?: return
-    val enabled = if (kind == "edit") state.canEdit else state.canReroll
-    val reason = if (kind == "edit") state.editReason else state.rerollReason
-    Column {
-        TextButton(onClick = { if (kind == "edit") onEdit(id) else onReroll(id) }, enabled = enabled,
-            colors = ButtonDefaults.textButtonColors(contentColor = LocalContentColor.current,
-                disabledContentColor = LocalContentColor.current.copy(alpha = .6f)),
-            modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp)) {
-            Text(if (kind == "edit") "수정" else "리롤")
-        }
-        if (!enabled) Text(chatActionReason(reason), style = MaterialTheme.typography.bodySmall)
-    }
+private data class ExpandedThought(val message: PublicMessage, val content: ThoughtContent) {
+    override fun toString() = "ExpandedThought"
 }
+
+private data class ChatScrollAnchor(val atEnd: Boolean, val messageId: String?, val sourceOffset: Int, val lineOffset: Float)
+private class MessageChunks(val text: String, val split: Boolean) {
+    val chunks = splitMessageBubbles(text, split).ifEmpty { listOf("") }
+    val starts = messageBubbleOffsets(text, chunks)
+}
+private data class MeasuredBubble(val start: Int, val geometry: BubbleGeometry)
 
 /** 동일 ID의 답변 교체에서도 기존 스크롤 위치와 마지막 진행 항목을 유지한다. */
 @Composable
 fun ChatHistory(state: ConnectionViewState, modifier: Modifier = Modifier, onEdit: (String) -> Unit, onReroll: (String) -> Unit,
                 onVisibleThoughts: (List<String>) -> Unit = {}, onRetryThought: (String) -> Unit = {},
+                listState: LazyListState = rememberLazyListState(),
                 footer: @Composable () -> Unit = {}) {
-    val listState = rememberLazyListState()
     val nearEnd by remember { derivedStateOf { !listState.canScrollForward } }
     val progress = chatActionProgress(state.chatActions, state.processing.phase)
+    val split = state.chatDisplay.splitEnabled
+    // 분할 결과는 현재 대화에만 보관하고, 변경되지 않은 원문은 재사용한다.
+    val chunkCache = remember { mutableMapOf<String, MessageChunks>() }
+    val measurements = remember { mutableStateMapOf<Pair<String, Boolean>, MeasuredBubble>() }
+    val groups = state.messages.map { message ->
+        val cached = chunkCache[message.id]
+        message to (cached?.takeIf { it.text == message.text && it.split == split }
+            ?: MessageChunks(message.text, split).also { chunkCache[message.id] = it })
+    }
+    SideEffect { chunkCache.keys.retainAll(state.messages.map { it.id }.toSet()) }
+    val expandedThoughts = remember { mutableStateMapOf<String, ExpandedThought>() }
+    LaunchedEffect(state.messages, state.thoughts) {
+        val messages = state.messages.associateBy { it.id }
+        expandedThoughts.keys.toList().forEach { id ->
+            val saved = expandedThoughts[id]
+            if (saved?.message != messages[id] || saved?.content != state.thoughts[id]) expandedThoughts.remove(id)
+        }
+    }
+    var pendingAnchor by remember { mutableStateOf<ChatScrollAnchor?>(null) }
+    val splitAnchor = remember(split) {
+        val first = listState.layoutInfo.visibleItemsInfo.firstOrNull { originalMessageId(it.key as? String ?: "") != null }
+        val measured = first?.let { measurements[it.key as String to !split] }
+        val geometry = measured?.geometry
+        val y = if (first != null && geometry != null) (-first.offset - geometry.textTop).coerceAtLeast(0f) else 0f
+        val line = geometry?.layout?.getLineForVerticalPosition(y) ?: 0
+        ChatScrollAnchor(!listState.canScrollForward, first?.let { originalMessageId(it.key as String) },
+            (measured?.start ?: 0) + (geometry?.layout?.getLineStart(line) ?: 0),
+            y - (geometry?.layout?.getLineTop(line) ?: 0f))
+    }
+    var previousSplit by remember { mutableStateOf(split) }
+    val rowCount = groups.sumOf { it.second.chunks.size }
     val visibleCallback by rememberUpdatedState(onVisibleThoughts)
     LaunchedEffect(listState) {
-        snapshotFlow { listState.layoutInfo.visibleItemsInfo.mapNotNull { it.key as? String } }
+        snapshotFlow { listState.layoutInfo.visibleItemsInfo.mapNotNull { originalMessageId(it.key as? String ?: "") }.distinct() }
             .distinctUntilChanged().collect { visibleCallback(it) }
     }
     DisposableEffect(Unit) { onDispose { visibleCallback(emptyList()) } }
-    LaunchedEffect(state.messages.lastOrNull()?.id, state.chatActions.busy, progress) {
-        if (nearEnd && state.messages.isNotEmpty()) listState.scrollToItem(state.messages.size + if (progress != null) 1 else 0)
+    // 복원이 끝나기 전에 새 답변이나 다음 분할 변경이 오더라도 원래 앵커를 버리지 않는다.
+    LaunchedEffect(split, state.messages) {
+        if (previousSplit == split && pendingAnchor == null) return@LaunchedEffect
+        val anchor = pendingAnchor ?: splitAnchor
+        pendingAnchor = anchor
+        if (state.messages.isNotEmpty() && !anchor.atEnd) {
+            var index = 0
+            for ((message, parts) in groups) {
+                if (message.id == anchor.messageId) {
+                    val chunk = messageBubbleAtOffset(parts.starts, anchor.sourceOffset)
+                    index += chunk
+                    val key = messageBubbleKey(message.id, chunk, chunk == parts.chunks.lastIndex) to split
+                    listState.scrollToItem(index)
+                    val measured = snapshotFlow { measurements[key]?.takeIf {
+                        it.geometry.layout.layoutInput.text.text == parts.chunks[chunk]
+                    } }.filterNotNull().first()
+                    val geometry = measured.geometry
+                    val line = geometry.layout.getLineForOffset((anchor.sourceOffset - measured.start).coerceIn(0, parts.chunks[chunk].length))
+                    listState.scrollToItem(index, (geometry.textTop + geometry.layout.getLineTop(line) + anchor.lineOffset).roundToInt())
+                    break
+                }
+                index += parts.chunks.size
+            }
+        } else if (state.messages.isNotEmpty()) {
+            listState.scrollToItem(rowCount + if (progress != null) 1 else 0)
+        }
+        previousSplit = split
+        pendingAnchor = null
     }
-    LazyColumn(modifier.fillMaxWidth(), state = listState, verticalArrangement = Arrangement.spacedBy(8.dp),
+    LaunchedEffect(state.messages.lastOrNull()?.id, state.chatActions.busy, progress) {
+        if (previousSplit == split && pendingAnchor == null && state.messages.isNotEmpty() && nearEnd) {
+            listState.scrollToItem(rowCount + if (progress != null) 1 else 0)
+        }
+    }
+    LazyColumn(modifier.fillMaxWidth().testTag("chat-history"), state = listState,
         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)) {
         if (state.messages.isEmpty()) item {
             Text(if (state.phase == ConnectionPhase.CONNECTED) "아직 표시할 대화가 없습니다." else "PC ENE를 실행하고 같은 Wi-Fi에서 연결해 주세요.", style = MaterialTheme.typography.bodyMedium)
         }
-        items(state.messages, key = { it.id }) { message ->
-            val user = message.role == "user"
-            Box(Modifier.fillMaxWidth(), contentAlignment = if (user) Alignment.CenterEnd else Alignment.CenterStart) {
-              Surface(color = if (user) ChatUserColor else ChatAssistantColor,
-                contentColor = if (user) Color.White else Color(0xFF111827),
-                modifier = Modifier.widthIn(max = 560.dp).fillMaxWidth(.88f), shape = RoundedCornerShape(18.dp)) {
-                Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text(if (message.role == "user") "나" else "ENE", style = MaterialTheme.typography.labelMedium)
-                    Text(message.text, style = MaterialTheme.typography.bodyLarge)
-                    if (message.attachment_unsupported == true) Text("첨부 내용은 PC에서 확인해 주세요.", style = MaterialTheme.typography.bodySmall)
-                    if (!user) MessageThought(state.thoughts[message.id]) { onRetryThought(message.id) }
-                    ChatMessageActions(message.id, message.role, state.chatActions, onEdit, onReroll)
-                }
-              }
+        groups.forEach { (message, parts) ->
+            val chunks = parts.chunks
+            items(chunks.size, key = { index -> messageBubbleKey(message.id, index, index == chunks.lastIndex) }) { index ->
+                val key = messageBubbleKey(message.id, index, index == chunks.lastIndex) to split
+                DisposableEffect(key) { onDispose { measurements.remove(key) } }
+                val thought = state.thoughts[message.id]
+                val expansion = thought?.takeIf { it.status == "available" }?.let { ExpandedThought(message, it) }
+                ChatMessageGroup(message, chunks[index], index == chunks.lastIndex, state.chatActions, thought,
+                    expansion != null && expandedThoughts[message.id] == expansion, {
+                        if (expandedThoughts[message.id] == expansion) expandedThoughts.remove(message.id)
+                        else if (expansion != null) expandedThoughts[message.id] = expansion
+                    }, onEdit, onReroll, onRetryThought) { measurements[key] = MeasuredBubble(parts.starts[index], it) }
             }
         }
         if (progress != null) item(key = "chat-action-progress") {

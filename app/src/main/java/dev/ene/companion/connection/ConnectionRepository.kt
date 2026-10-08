@@ -297,6 +297,8 @@ class ConnectionRepository(
                                         registrations.save(credentials)
                                     }
                                     chatActions.forget()
+                                    chatDisplay.forget()
+                                    publishChatDisplay()
                                     return@withTimeout
                                 }
                                 is PairFailed -> {
@@ -382,6 +384,7 @@ class ConnectionRepository(
                 if (code == "authorization_revoked" && error is ConnectionException && error.peerAuthenticated) {
                     drafts = DraftOutbox()
                     chatActions.forget()
+                    chatDisplay.forget()
                     mutableState.value = ConnectionViewState(errorCode = code, diagnostics = mutableState.value.diagnostics.copy(stage = ConnectionStage.IDLE))
                     try {
                         clearCharacterCache()

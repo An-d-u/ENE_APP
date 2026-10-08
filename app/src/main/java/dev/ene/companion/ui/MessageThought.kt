@@ -4,22 +4,14 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
 import dev.ene.companion.connection.ThoughtContent
 
-/** 펼침 상태와 내용은 화면 메모리에만 유지한다. */
+/** 펼침 상태는 원본 메시지 소유자가 보관하며 본문·오류만 그린다. */
 @Composable
-fun MessageThought(content: ThoughtContent?, onRetry: () -> Unit) {
-    var expanded by remember(content) { mutableStateOf(false) }
+fun MessageThought(content: ThoughtContent?, expanded: Boolean, onRetry: () -> Unit) {
     when (content?.status) {
         "available" -> Column {
-            TextButton(onClick = { expanded = !expanded },
-                colors = ButtonDefaults.textButtonColors(contentColor = LocalContentColor.current),
-                modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp).semantics {
-                    stateDescription = if (expanded) "생각 펼쳐짐" else "생각 접힘"
-                }) { Text(if (expanded) "접기" else "생각 보기") }
             if (expanded) {
                 HorizontalDivider()
                 Text(content.text, Modifier.padding(vertical = 8.dp), style = MaterialTheme.typography.bodyMedium)

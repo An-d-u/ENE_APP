@@ -48,11 +48,12 @@ class ChatActionsTlsTest {
                 override fun onMessage(webSocket: WebSocket, text: String) {
                     when (val message = ProtocolCodec.decode(text)) {
                         is Hello -> {
-            assertEquals(listOf("chat_actions_v1", "message_thoughts_v1"), message.capabilities)
+                            assertEquals(listOf("chat_actions_v1", "message_thoughts_v1", "chat_display_v1"), message.capabilities)
                             send(webSocket, Ready(serverId, epoch, conversation, 1, message.capabilities))
                             send(webSocket, ExtensionsReady(1, epoch, id(40), message.capabilities))
                         }
                         is SyncRequest -> { snapshot(webSocket); available(webSocket) }
+                        is ChatDisplayRequest -> send(webSocket, ChatDisplaySettings(1, epoch, id(40), 0, true))
                         is ChatAction -> {
                             actions.add(message)
                             send(webSocket, RequestStatus(epoch, conversation, message.request_id, "accepted", id(5)))
@@ -82,6 +83,7 @@ class ChatActionsTlsTest {
             try {
                 repo.foreground(true).join()
                 withTimeout(5000) { repo.state.first { it.chatActions.canEdit } }
+                withTimeout(5000) { repo.state.first { it.chatDisplay.splitEnabled } }
                 repo.editDraft("가상 새 입력 초안").join()
                 repo.openMessageEditor(id(5)).join(); repo.editMessageDraft("가상 WSS 편집 요청").join(); repo.submitMessageEdit().join()
                 val edited = withTimeout(5000) { repo.state.first { !it.chatActions.busy && it.messages.firstOrNull()?.text == "가상 WSS 편집 요청" } }
@@ -90,6 +92,7 @@ class ChatActionsTlsTest {
                 repo.rerollMessage(id(6)).join()
                 val rerolled = withTimeout(5000) { repo.state.first { !it.chatActions.busy && it.messages.lastOrNull()?.text == "가상 WSS 교체 답변 2" } }
                 assertEquals(listOf(id(5), id(6)), rerolled.messages.map { it.id })
+                assertTrue(rerolled.chatDisplay.splitEnabled)
                 assertEquals(listOf("edit", "reroll"), actions.map { it.kind })
                 assertEquals(2, queries.count { it.refresh })
                 assertFalse(rerolled.audioOutput.reason == "ready")

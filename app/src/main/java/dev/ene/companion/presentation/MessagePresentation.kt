@@ -46,3 +46,17 @@ fun originalMessageId(key: String): String? = when {
     key.startsWith("chat-part:") -> key.removePrefix("chat-part:").substringBeforeLast(':')
     else -> null
 }
+
+/** 공백 제거 전 본문의 위치를 보관해 분할 전환 때 읽던 내용을 다시 찾는다. */
+fun messageBubbleOffsets(text: String, chunks: List<String>): IntArray {
+    val normalized = text.replace("\r\n", "\n").replace('\r', '\n')
+    var next = 0
+    return IntArray(chunks.size) { index ->
+        val start = normalized.indexOf(chunks[index], next).coerceAtLeast(next)
+        next = start + chunks[index].length
+        start
+    }
+}
+
+fun messageBubbleAtOffset(starts: IntArray, position: Int): Int =
+    starts.binarySearch(position).let { if (it >= 0) it else (-it - 2).coerceAtLeast(0) }

@@ -12,6 +12,13 @@ class ChatActionPresentationTest {
         assertTrue(requireNotNull(chatActionCompatibilityNotice(connected)).contains("업데이트"))
         assertNull(chatActionCompatibilityNotice(connected.copy(chatActions = ChatActionsViewState(supported = true))))
     }
+    @Test fun displayNoticesAreSeparateFromConnectionAndActions() {
+        assertNull(chatDisplayNotice(ConnectionViewState()))
+        val state = ConnectionViewState(phase = ConnectionPhase.CONNECTED, chatDisplay = ChatDisplayViewState("unsupported"))
+        assertTrue(requireNotNull(chatDisplayNotice(state)).contains("업데이트"))
+        assertNull(chatDisplayNotice(state.copy(chatDisplay = ChatDisplayViewState("ready", true))))
+        assertTrue(requireNotNull(chatDisplayNotice(state.copy(chatDisplay = ChatDisplayViewState("error", true)))).contains("마지막"))
+    }
     @Test fun onlyExplicitLatestTargetsHaveControlsEvenWhileDisabled() {
         val state = ChatActionsViewState(supported = true, userMessageId = "latest-user", assistantMessageId = "latest-assistant")
         assertEquals("edit", messageAction("latest-user", "user", state))
