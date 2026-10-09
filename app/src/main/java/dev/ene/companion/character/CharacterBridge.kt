@@ -14,6 +14,7 @@ class CharacterBridge(val generation: String = UUID.randomUUID().toString()) : C
     private var initialized = false
     private var documentReady = false
     private var modelVersion: String? = null
+    private var presentationGeneration: Long? = null
     init { ProtocolCodec.uuid(JsonPrimitive(generation)) }
 
     fun expectModel(version: String?) {
@@ -23,8 +24,17 @@ class CharacterBridge(val generation: String = UUID.randomUUID().toString()) : C
 
     fun initialize(): String = buildJsonObject { put("type", "initialize"); put("generation", generation) }.toString()
 
+    fun bindPresentation(value: Long): String {
+        check(!closed) { "character_closed" }
+        require(value in 1..9_007_199_254_740_991L && value > (presentationGeneration ?: 0)) { "invalid_presentation_generation" }
+        presentationGeneration = value
+        return buildJsonObject {
+            put("type", "binding"); put("generation", generation); put("presentation_generation", value)
+        }.toString()
+    }
+
     fun command(type: String, value: JsonObject): String {
-        check(!closed && documentReady) { "character_not_ready" }
+        check(!closed && documentReady && presentationGeneration != null) { "character_not_ready" }
         require(type in setOf("snapshot", "action", "playback", "head_pat", "preview", "presentation")) { "unknown_command" }
         if (type == "presentation") {
             require(value.keys == setOf("placement", "visible")) { "invalid_presentation" }
@@ -32,7 +42,7 @@ class CharacterBridge(val generation: String = UUID.randomUUID().toString()) : C
             require(visible != null && !visible.isString && visible.booleanOrNull != null) { "invalid_presentation" }
             CharacterPlacementCodec.fromJson(value["placement"] as? JsonObject ?: throw IllegalArgumentException("invalid_presentation"))
         }
-        return buildJsonObject { put("type", type); put("generation", generation); put("value", value) }.toString().also {
+        return buildJsonObject { put("type", type); put("generation", generation); put("presentation_generation", presentationGeneration); put("value", value) }.toString().also {
             require(it.toByteArray(Charsets.UTF_8).size <= if (type in setOf("head_pat", "presentation")) 2048 else CharacterSnapshot.MAX_MANIFEST_BYTES + 256) { "character_command_too_large" }
         }
     }
@@ -48,19 +58,24 @@ class CharacterBridge(val generation: String = UUID.randomUUID().toString()) : C
                 return CharacterEvent(type)
             }
             if (!initialized || ProtocolCodec.uuid(body["generation"]) != generation) return null
-            if (type == "error") {
-                val code = ProtocolCodec.text(body["code"])
-                return if (code == "character_initialization_failed" ||
-                    (documentReady && code in setOf("character_asset_failed", "character_render_failed")))
-                    CharacterEvent(type, code = code) else null
-            }
+            if (type == "error" && !documentReady && ProtocolCodec.text(body["code"]) == "character_initialization_failed")
+                return CharacterEvent(type, code = "character_initialization_failed")
             if (type == "document_ready") {
                 if (documentReady) return null
                 documentReady = true
                 return CharacterEvent(type)
             }
             if (!documentReady) return null
+            if (type == "document_error") return if (ProtocolCodec.text(body["code"]) == "character_render_failed")
+                CharacterEvent(type, code = "character_render_failed") else null
+            val applied = ProtocolCodec.integer(body["presentation_generation"])
+            if (applied !in 1..9_007_199_254_740_991L || applied != presentationGeneration) return null
             when (type) {
+                "error" -> {
+                    val code = ProtocolCodec.text(body["code"])
+                    if (code in setOf("character_asset_failed", "character_render_failed"))
+                        CharacterEvent(type, code = code, presentationGeneration = applied) else null
+                }
                 "head_pat_input" -> {
                     val version = CharacterSnapshot.digest(body["model_generation"])
                     if (version != modelVersion) return null
@@ -70,16 +85,16 @@ class CharacterBridge(val generation: String = UUID.randomUUID().toString()) : C
                     if (intensity.isString) return null
                     val amount = intensity.doubleOrNull?.takeIf { it.isFinite() && it in 0.0..1.0 } ?: return null
                     CharacterEvent(type, version, input = HeadPatInput(version, ProtocolCodec.uuid(body["interaction_id"]),
-                        ProtocolCodec.integer(body["seq"]), phase, amount))
+                        ProtocolCodec.integer(body["seq"]), phase, amount), presentationGeneration = applied)
                 }
                 "ready", "unavailable" -> {
                     val version = if (body["model_version"] == JsonNull) null else CharacterSnapshot.digest(body["model_version"])
-                    if (version != modelVersion || (type == "ready" && version == null)) null else CharacterEvent(type, version)
+                    if (version != modelVersion || (type == "ready" && version == null)) null else CharacterEvent(type, version, presentationGeneration = applied)
                 }
                 else -> null
             }
         } catch (_: IllegalArgumentException) { null }
     }
 
-    override fun close() { closed = true; initialized = false; documentReady = false; modelVersion = null }
+    override fun close() { closed = true; initialized = false; documentReady = false; modelVersion = null; presentationGeneration = null }
 }

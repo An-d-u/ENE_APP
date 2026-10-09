@@ -7,8 +7,25 @@ import org.junit.Test
 import kotlinx.serialization.json.*
 
 class CharacterBridgeTest {
-    @Test fun presentationAcceptsExpandedBoundsButRejectsOutOfRangeNumbers() {
+    @Test fun obsoletePresentationCannotReportReadyOrFailureInTheSameDocument() {
         val bridge = CharacterBridge(generation)
+        bridge.expectModel(model)
+        bridge.receive(origin, true, "{\"type\":\"bridge_ready\"}")
+        bridge.receive(origin, true, message("document_ready"))
+        // 현재 세대가 없는 모델 사건부터 거절해야 한다.
+        assertNull(bridge.receive(origin, true, message("ready", ",\"model_version\":\"$model\",\"presentation_generation\":99")))
+        bridge.bindPresentation(1)
+        assertNotNull(bridge.receive(origin, true, message("ready", ",\"model_version\":\"$model\"")))
+        bridge.bindPresentation(2)
+        assertNull(bridge.receive(origin, true, message("ready", ",\"model_version\":\"$model\"")))
+        assertNull(bridge.receive(origin, true, message("error", ",\"code\":\"character_render_failed\"")))
+        assertEquals("document_error", bridge.receive(origin, true, message("document_error", ",\"code\":\"character_render_failed\""))?.type)
+        for (value in listOf(0L, -1L, 2L, 9_007_199_254_740_992L)) {
+            assertThrows(IllegalArgumentException::class.java) { bridge.bindPresentation(value) }
+        }
+    }
+    @Test fun presentationAcceptsExpandedBoundsButRejectsOutOfRangeNumbers() {
+        val bridge = CharacterBridge(generation).also { it.bindPresentation(1) }
         bridge.receive(origin, true, "{\"type\":\"bridge_ready\"}")
         bridge.receive(origin, true, message("document_ready"))
         for ((x, y) in listOf(-300 to 400, 400 to -300)) {
@@ -24,7 +41,7 @@ class CharacterBridgeTest {
     }
 
     @Test fun presentationIsStrictAndUnavailableBeforeDocumentReadyOrAfterClose() {
-        val bridge = CharacterBridge(generation)
+        val bridge = CharacterBridge(generation).also { it.bindPresentation(1) }
         val value = dev.ene.companion.character.CharacterPlacement(1.5, 25.0, 75.0).presentation(false)
         assertThrows(IllegalStateException::class.java) { bridge.command("presentation", value) }
         bridge.receive(origin, true, "{\"type\":\"bridge_ready\"}")
@@ -41,10 +58,10 @@ class CharacterBridgeTest {
     private val generation = "00000000-0000-4000-8000-000000000001"
     private val origin = "https://appassets.androidplatform.net"
     private val model = "a".repeat(64)
-    private fun message(type: String, extra: String = "") = "{\"type\":\"$type\",\"generation\":\"$generation\"$extra}"
+    private fun message(type: String, extra: String = "") = "{\"type\":\"$type\",\"generation\":\"$generation\",\"presentation_generation\":1$extra}"
 
     @Test fun replyChannelStartsOnlyOnceFromAllowedMainFrame() {
-        val bridge = CharacterBridge(generation)
+        val bridge = CharacterBridge(generation).also { it.bindPresentation(1) }
         val hello = "{\"type\":\"bridge_ready\"}"
         assertNull(bridge.receive(origin, true, message("document_ready")))
         assertNull(bridge.receive("https://example.invalid", true, hello))
@@ -57,7 +74,7 @@ class CharacterBridgeTest {
     }
 
     @Test fun initializationFailureCanArriveBeforeDocumentReadyWithoutArbitraryDetails() {
-        val bridge = CharacterBridge(generation)
+        val bridge = CharacterBridge(generation).also { it.bindPresentation(1) }
         bridge.receive(origin, true, "{\"type\":\"bridge_ready\"}")
         assertNull(bridge.receive(origin, true, message("error", ",\"code\":\"synthetic secret\"")))
         assertEquals("character_initialization_failed", bridge.receive(origin, true,
@@ -65,7 +82,7 @@ class CharacterBridgeTest {
     }
 
     @Test fun bridgeRequiresCurrentMainFrameOriginGenerationAndKnownType() {
-        val bridge = CharacterBridge(generation)
+        val bridge = CharacterBridge(generation).also { it.bindPresentation(1) }
         val ready = message("document_ready")
         bridge.receive(origin, true, "{\"type\":\"bridge_ready\"}")
         assertNull(bridge.receive("https://example.invalid", true, ready))
@@ -80,7 +97,7 @@ class CharacterBridgeTest {
     }
 
     @Test fun staleModelReadinessAndArbitraryErrorContentCannotReachNativeState() {
-        val bridge = CharacterBridge(generation)
+        val bridge = CharacterBridge(generation).also { it.bindPresentation(1) }
         bridge.expectModel(model)
         bridge.receive(origin, true, "{\"type\":\"bridge_ready\"}")
         assertNull(bridge.receive(origin, true, message("ready", ",\"model_version\":\"$model\"")))
@@ -110,7 +127,7 @@ class CharacterBridgeTest {
     }
 
     @Test fun patInputRequiresCurrentModelAndTypedBoundedFields() {
-        val bridge = CharacterBridge(generation)
+        val bridge = CharacterBridge(generation).also { it.bindPresentation(1) }
         bridge.expectModel(model)
         bridge.receive(origin, true, "{\"type\":\"bridge_ready\"}")
         bridge.receive(origin, true, message("document_ready"))
@@ -124,7 +141,7 @@ class CharacterBridgeTest {
     }
 
     @Test fun manifestLimitLeavesRoomForNativeEnvelope() {
-        val bridge = CharacterBridge(generation)
+        val bridge = CharacterBridge(generation).also { it.bindPresentation(1) }
         bridge.receive(origin, true, "{\"type\":\"bridge_ready\"}")
         bridge.receive(origin, true, message("document_ready"))
         val value = buildJsonObject { put("synthetic", "a".repeat(262_128)) }

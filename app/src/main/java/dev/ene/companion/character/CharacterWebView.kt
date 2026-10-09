@@ -42,6 +42,7 @@ class CharacterWebView(
     private var replyProxy: JavaScriptReplyProxy? = null
     private var pending: CharacterSnapshot? = null
     private var pendingPresentation: JsonObject? = null
+    private var pendingBinding: String? = null
     private val handler = Handler(Looper.getMainLooper())
     private val readinessTimeout = Runnable { if (!documentReady) fail("character_bridge_timeout") }
 
@@ -109,6 +110,7 @@ class CharacterWebView(
                             }
                             if (event.type == "document_ready") {
                                 documentReady = true; handler.removeCallbacks(readinessTimeout)
+                                pendingBinding?.let(::send)
                                 pendingPresentation?.let { post("presentation", it) }
                                 pending?.let { post("snapshot", it.json) }
                             }
@@ -124,6 +126,14 @@ class CharacterWebView(
     }
 
     /** 호출자가 가진 핀은 유지한다. 뷰는 별도 핀을 취득해 회전/교체 때 정확히 해제한다. */
+    override fun bindPresentation(generation: Long) {
+        mainThread()
+        if (closed) return
+        pending = null
+        pendingBinding = bridge.bindPresentation(generation)
+        if (documentReady) send(pendingBinding!!)
+    }
+
     override fun show(snapshot: CharacterSnapshot, character: CharacterCache.CachedCharacter?) {
         mainThread()
         if (closed || browser == null) return
@@ -199,7 +209,7 @@ class CharacterWebView(
     override fun close() {
         mainThread()
         if (closed) return
-        closed = true; pending = null; pendingPresentation = null; replyProxy = null; bridge.close()
+        closed = true; pending = null; pendingPresentation = null; pendingBinding = null; replyProxy = null; bridge.close()
         handler.removeCallbacks(readinessTimeout)
         synchronized(resourcesLock) {
             streams.toList().forEach { runCatching { it.close() } }
