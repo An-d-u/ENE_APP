@@ -43,11 +43,15 @@ class CharacterWebView(
     private var pending: CharacterSnapshot? = null
     private var pendingPresentation: JsonObject? = null
     private var pendingBinding: String? = null
+    private var presentationVisible = false
+    private var compositionVisible = true
+    private var placement = CharacterPlacement()
     private val handler = Handler(Looper.getMainLooper())
     private val readinessTimeout = Runnable { if (!documentReady) fail("character_bridge_timeout") }
 
     init {
         mainThread()
+        applyVisibility()
         if (!bridgeSupported || !WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) onFailure("character_webview_unsupported")
         else try {
             val web = WebView(context)
@@ -103,6 +107,10 @@ class CharacterWebView(
                     if (!closed && view === browser && view.url == CharacterRequestPolicy.DOCUMENT && message.type == WebMessageCompat.TYPE_STRING) {
                         val event = bridge.receive(origin.toString(), mainFrame, message.data.orEmpty())
                         if (event != null) {
+                            if (event.type == "document_error" || event.code == "character_initialization_failed") {
+                                fail(event.code ?: "character_render_failed")
+                                return@addWebMessageListener
+                            }
                             if (event.type == "bridge_ready") {
                                 replyProxy = proxy
                                 send(bridge.initialize())
@@ -129,6 +137,7 @@ class CharacterWebView(
     override fun bindPresentation(generation: Long) {
         mainThread()
         if (closed) return
+        presentationVisible = false; applyVisibility()
         pending = null
         pendingBinding = bridge.bindPresentation(generation)
         if (documentReady) send(pendingBinding!!)
@@ -157,8 +166,24 @@ class CharacterWebView(
     override fun present(placement: CharacterPlacement, visible: Boolean) {
         mainThread()
         if (closed) return
+        this.placement = placement
+        presentationVisible = visible; applyVisibility()
         pendingPresentation = placement.presentation(visible)
         if (documentReady) post("presentation", pendingPresentation!!)
+    }
+
+    /** 오래된 Compose 상태가 Main 수명 콜백의 숨김을 되돌리지 못한다. */
+    fun composeVisible(value: Boolean) {
+        mainThread()
+        compositionVisible = value
+        applyVisibility()
+    }
+
+    private fun applyVisibility() {
+        val visible = !closed && presentationVisible && compositionVisible
+        visibility = if (visible) VISIBLE else INVISIBLE
+        isEnabled = visible
+        importantForAccessibility = if (visible) IMPORTANT_FOR_ACCESSIBILITY_AUTO else IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
     }
 
     override fun post(type: String, value: JsonObject) {
@@ -168,6 +193,7 @@ class CharacterWebView(
     }
 
     override fun clear() {
+        present(placement, false)
         // 새 연결을 기다리는 뷰는 재사용하되 이전 모델 파일/스트림은 동기적으로 해제한다.
         show(CharacterSnapshot.parse("""{
             "status":"unavailable","model_version":null,"model_id":null,"entry_asset_id":null,
@@ -210,6 +236,7 @@ class CharacterWebView(
         mainThread()
         if (closed) return
         closed = true; pending = null; pendingPresentation = null; pendingBinding = null; replyProxy = null; bridge.close()
+        presentationVisible = false; applyVisibility()
         handler.removeCallbacks(readinessTimeout)
         synchronized(resourcesLock) {
             streams.toList().forEach { runCatching { it.close() } }

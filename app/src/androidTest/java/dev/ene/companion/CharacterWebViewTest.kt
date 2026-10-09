@@ -1,6 +1,7 @@
 package dev.ene.companion
 
 import android.webkit.WebSettings
+import android.view.View
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -15,6 +16,25 @@ import java.util.concurrent.TimeUnit
 /** 단말 실행은 별도 승인 단계다. 현재는 계측 APK의 컴파일만 검증한다. */
 @RunWith(AndroidJUnit4::class)
 class CharacterWebViewTest {
+    @Test fun nativePresentationHidesImmediatelyWithoutDestroyingBrowser() {
+        InstrumentationRegistry.getInstrumentation().runOnMainSync {
+            val view = CharacterWebView(ApplicationProvider.getApplicationContext(), {}, {})
+            val browser = view.browser
+            view.bindPresentation(1)
+            view.present(CharacterPlacement(), true)
+            view.present(CharacterPlacement(), false)
+            assertEquals(View.INVISIBLE, view.visibility)
+            assertFalse(view.isEnabled)
+            assertEquals(View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS, view.importantForAccessibility)
+            view.composeVisible(true)
+            assertEquals(View.INVISIBLE, view.visibility)
+            assertSame(browser, view.browser)
+            view.present(CharacterPlacement(), true)
+            assertEquals(View.VISIBLE, view.visibility)
+            view.close(); view.close()
+            assertNull(view.browser)
+        }
+    }
     @Test fun bundledDocumentCompletesReplyChannelHandshakeAndReceivesSnapshot() {
         val completed = CountDownLatch(1)
         var view: CharacterWebView? = null
@@ -34,6 +54,7 @@ class CharacterWebViewTest {
                     }
                     if (event.type == "error") { failure = event.code; completed.countDown() }
                 }, { failure = it; completed.countDown() })
+                view!!.bindPresentation(1)
                 view!!.present(CharacterPlacement(1.2, 10.0, 90.0), true)
                 view!!.present(CharacterPlacement(1.5, 25.0, 75.0), false)
                 view!!.clear()

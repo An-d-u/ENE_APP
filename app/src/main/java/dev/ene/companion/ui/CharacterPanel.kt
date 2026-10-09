@@ -55,9 +55,12 @@ internal fun <T : View> CharacterSurface(state: CharacterViewState, placementLoa
             AndroidView(factory = factory, onReset = null, onRelease = onRelease,
                 modifier = Modifier.fillMaxSize().semantics { if (visible) contentDescription = "ENE 캐릭터" },
                 update = { view ->
-                    view.visibility = if (visible) View.VISIBLE else View.INVISIBLE
-                    view.isEnabled = visible
-                    view.importantForAccessibility = if (visible) View.IMPORTANT_FOR_ACCESSIBILITY_AUTO else View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
+                    if (view is CharacterWebView) view.composeVisible(visible)
+                    else {
+                        view.visibility = if (visible) View.VISIBLE else View.INVISIBLE
+                        view.isEnabled = visible
+                        view.importantForAccessibility = if (visible) View.IMPORTANT_FOR_ACCESSIBILITY_AUTO else View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
+                    }
                 })
         }
     }
