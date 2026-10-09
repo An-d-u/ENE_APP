@@ -39,7 +39,11 @@ class ConnectionRepository(
     val characterPlacement = placementController?.state ?: MutableStateFlow(CharacterPlacementState(loaded = true)).asStateFlow()
     private var characterPanelVisible = true
     private var characterRenderer: CharacterRenderer? = null
-    private val characterPresentation = CharacterPresentationOwner { mutableCharacterState.value = it }
+    private val characterPresentation = CharacterPresentationOwner {
+        // 폐기된 View의 늦은 Compose 해제를 기다리는 동안 새 연결에 다시 붙이지 않는다.
+        if (mutableCharacterState.value.viewGeneration != it.viewGeneration) characterRenderer = null
+        mutableCharacterState.value = it
+    }
     private var foreground = false
     private var resumedActivity = false
     private var generation = 0L

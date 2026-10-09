@@ -49,6 +49,24 @@ class CharacterScreenTest {
         compose.runOnIdle { assertEquals(1, retries) }
     }
 
+    @Test fun retainedSurfaceSurvivesRepeatedReconnectsButNotActualDisposal() {
+        var mounted by mutableStateOf(true)
+        var state by mutableStateOf(CharacterViewState("ready", retainRenderer = true, presentationAllowed = true))
+        var creations = 0
+        var releases = 0
+        compose.setContent { MaterialTheme {
+            if (mounted) CharacterSurface(state, true, true, { View(it).also { creations++ } }, { releases++ })
+        } }
+        repeat(3) {
+            compose.runOnIdle { state = state.copy(status = "refreshing", presentationAllowed = false) }
+            compose.runOnIdle { assertEquals(1, creations); assertEquals(0, releases); state = state.copy(status = "ready", presentationAllowed = true) }
+        }
+        compose.runOnIdle { state = state.copy(viewGeneration = 1) }
+        compose.runOnIdle { assertEquals(2, creations); assertEquals(1, releases); mounted = false }
+        compose.runOnIdle { assertEquals(2, releases); mounted = true }
+        compose.runOnIdle { assertEquals(3, creations); assertEquals(2, releases) }
+    }
+
     @Test fun loadingCharacterKeepsItsStatusReachable() {
         compose.setContent { MaterialTheme { CharacterStatus(CharacterViewState("loading")) {} } }
         compose.onNodeWithText("PC의 캐릭터를 가져오고 있습니다.").assertIsDisplayed()

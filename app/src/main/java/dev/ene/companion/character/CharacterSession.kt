@@ -324,6 +324,9 @@ internal class CharacterSession(
         headPat?.cancel()
         sequence.detached(); playback.reset()
         presentation.fail(binding, code)
+        // 소유자의 폐기로 늦은 onRelease가 걸러져도 실패한 View/Activity를 붙잡지 않는다.
+        renderer = null; lastPresentation = null; lastMouth = null
+        currentLoad?.close(); currentLoad = null
         publish("error", code)
     }
 

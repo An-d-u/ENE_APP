@@ -153,6 +153,7 @@ internal class CharacterPresentationOwner(private val onState: (CharacterViewSta
 
     private fun publish() {
         val next = sessionState.copy(viewGeneration = viewGeneration,
+            status = if (prepared && sessionState.status in setOf("loading", "rendering")) "refreshing" else sessionState.status,
             retainRenderer = sessionState.retainRenderer || prepared,
             presentationAllowed = resumed && binding != null && applied && sessionState.presentationAllowed)
         if (next != state) { state = next; onState(next) }

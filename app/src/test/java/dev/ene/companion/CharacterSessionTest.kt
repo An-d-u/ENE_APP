@@ -340,6 +340,9 @@ class CharacterSessionTest {
         val f = Fixture(this) { loads++; result() }
         f.activate(); advanceTimeBy(300); runCurrent(); f.rendered()
         f.session.rendererFailed(f.renderer, "character_renderer_gone")
+        // GC 시간에 의존하지 않고 종료된 Activity/View의 강한 참조가 남지 않는지 확인한다.
+        val rendererField = CharacterSession::class.java.getDeclaredField("renderer").apply { isAccessible = true }
+        assertNull(rendererField.get(f.session))
         advanceTimeBy(5000); runCurrent()
         assertEquals("error", f.states.last().status)
         assertEquals(1, loads)

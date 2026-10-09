@@ -103,6 +103,7 @@ class CharacterRetentionTest {
                 assertEquals(f.mediaOpened, f.mediaClosed)
                 val loads = f.loads; advanceTimeBy(2000); runCurrent(); assertEquals(loads, f.loads)
                 f.connect()
+                assertEquals("refreshing", f.repository.characterState.value.status)
                 f.repository.characterEvent(f.renderer, CharacterEvent("ready", f.snapshot.modelVersion, presentationGeneration = old))
                 assertFalse(f.renderer.visible)
                 f.ready(); assertTrue(f.renderer.visible)
@@ -183,6 +184,13 @@ class CharacterRetentionTest {
             assertFalse(f.repository.characterState.value.retainRenderer)
             f.repository.activityResumed(true); assertFalse(f.renderer.visible)
             assertNull(f.renderer.mounted)
+            val oldSnapshots = f.renderer.snapshots.size
+            f.connect()
+            assertEquals(oldSnapshots, f.renderer.snapshots.size)
+            val replacement = RetainedRenderer()
+            f.repository.attachCharacter(replacement); f.ready(replacement)
+            f.repository.detachCharacter(f.renderer)
+            assertTrue(replacement.visible)
         } finally { f.close() }
     }
 
@@ -205,6 +213,26 @@ class CharacterRetentionTest {
                 assertEquals(f.mediaOpened, f.mediaClosed)
             } finally { f.close() }
         }
+    }
+
+    @Test fun rendererFailureAndLateReleaseCannotDetachExplicitReplacement() = runTest {
+        val f = Fixture(this)
+        try {
+            f.prepare()
+            f.repository.characterFailed(f.renderer, "character_renderer_gone")
+            assertEquals(ConnectionPhase.CONNECTED, f.repository.state.value.phase)
+            assertEquals("error", f.repository.characterState.value.status)
+            assertNull(f.renderer.mounted)
+            f.cache.clear()
+            f.repository.retryCharacter(); advanceTimeBy(300); runCurrent()
+            val replacement = RetainedRenderer()
+            f.repository.attachCharacter(replacement)
+            f.repository.detachCharacter(f.renderer)
+            f.repository.characterFailed(f.renderer, "character_renderer_gone")
+            f.ready(replacement)
+            assertTrue(replacement.visible)
+            assertEquals(ConnectionPhase.CONNECTED, f.repository.state.value.phase)
+        } finally { f.close() }
     }
 
     @Test fun actualRepositoryReadsFreshManifestWithoutRetransferringRetainedAssets() = runBlocking {
