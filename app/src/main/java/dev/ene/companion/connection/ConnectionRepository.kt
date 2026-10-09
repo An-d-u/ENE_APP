@@ -217,14 +217,14 @@ class ConnectionRepository(
     fun updateAddress(host: String, port: Int): Job = command {
         val endpoint = Endpoint.parse(host, port)
         val credentials = withContext(ioDispatcher) { registrations.load() } ?: return@command
-        stopConnection()
+        stopConnection(CharacterStopReason.SAME_IDENTITY_RETRY)
         show(ConnectionPhase.ACTION_REQUIRED)
         withContext(ioDispatcher) { profiles.save(ConnectionProfile(credentials.serverId, listOf(endpoint))) }
         if (foreground) startRegistered()
     }
 
     fun forget(): Job = command {
-        stopConnection()
+        stopConnection(CharacterStopReason.REGISTRATION_CHANGE)
         drafts = DraftOutbox()
         chatActions.forget()
         chatDisplay.forget()
@@ -236,11 +236,11 @@ class ConnectionRepository(
     }
 
     fun retry(): Job = command {
-        if (foreground) { stopConnection(); startRegistered() }
+        if (foreground) { stopConnection(CharacterStopReason.SAME_IDENTITY_RETRY); startRegistered() }
     }
 
     fun cancelPairing(): Job = command {
-        stopConnection()
+        stopConnection(CharacterStopReason.REGISTRATION_CHANGE)
         if (foreground) startRegistered() else show(ConnectionPhase.PAUSED)
     }
 
@@ -255,7 +255,7 @@ class ConnectionRepository(
     fun foreground(active: Boolean): Job = command {
         if (foreground != active) {
             foreground = active
-            stopConnection()
+            stopConnection(CharacterStopReason.BACKGROUND)
             if (active) startRegistered() else show(ConnectionPhase.PAUSED)
         }
     }
@@ -263,7 +263,7 @@ class ConnectionRepository(
     fun pair(raw: String): Job = command {
         if (!foreground) return@command
         val qr = PairingQr.parse(raw, wallClock)
-        stopConnection()
+        stopConnection(CharacterStopReason.REGISTRATION_CHANGE)
         show(ConnectionPhase.CONNECTING)
         val expected = generation
         connection = scope.launch {
@@ -332,7 +332,11 @@ class ConnectionRepository(
             try {
                 stage(ConnectionStage.SAVED_ADDRESSES)
                 val credentials = withContext(ioDispatcher) { registrations.load() }
-                if (credentials == null) { mutableState.value = ConnectionViewState(draft = drafts.draft, diagnostics = mutableState.value.diagnostics.copy(stage = ConnectionStage.IDLE)); return }
+                if (credentials == null) {
+                    characterPresentation.discard(CharacterStopReason.REGISTRATION_CHANGE)
+                    mutableState.value = ConnectionViewState(draft = drafts.draft, diagnostics = mutableState.value.diagnostics.copy(stage = ConnectionStage.IDLE))
+                    return
+                }
                 mutableState.value = mutableState.value.copy(registered = true)
                 val profile = withContext(ioDispatcher) { profiles.load() }
                 if (profile == null || profile.serverId != credentials.serverId) throw ConnectionException("invalid_connection_settings")
@@ -364,6 +368,10 @@ class ConnectionRepository(
                             if (synchronized) throw ConnectionException("pc_unreachable")
                             failures.add(ConnectionException("pc_unreachable"))
                         } catch (error: ConnectionException) {
+                            // 후보 실패를 연결 불가로 합치기 전에 신뢰 실패의 보관 모델을 폐기한다.
+                            if (error.code in TLS_FAILURE_CODES || error.code in setOf("server_mismatch", "unexpected_server", "registration_changed")) {
+                                characterPresentation.discard(CharacterStopReason.TRUST_FAILURE)
+                            }
                             trust.validate()
                             failed(error.code); failureRecorded = true
                             if (synchronized || error.code == "authorization_revoked" && error.peerAuthenticated) throw error
@@ -399,7 +407,10 @@ class ConnectionRepository(
                     catch (failure: Exception) { show(ConnectionPhase.ACTION_REQUIRED, failureCode(failure)) }
                     return
                 }
-                if (code !in RETRYABLE_CONNECTION_CODES) { show(ConnectionPhase.ACTION_REQUIRED, code); return }
+                if (code !in RETRYABLE_CONNECTION_CODES) {
+                    characterPresentation.discard(CharacterStopReason.TRUST_FAILURE)
+                    show(ConnectionPhase.ACTION_REQUIRED, code); return
+                }
                 show(ConnectionPhase.RECONNECTING, code)
             }
             retry = true
@@ -435,6 +446,7 @@ class ConnectionRepository(
     ) {
         stage(ConnectionStage.SECURE_SESSION)
         val socket = transport.open(endpoint, credentials.serverId, credentials.token, pairing = false)
+        var owned: Active? = null
         try {
             val requested = buildList {
                 add("chat_actions_v1")
@@ -455,7 +467,7 @@ class ConnectionRepository(
             mutableState.value = mutableState.value.copy(phase = ConnectionPhase.SYNCING, endpoint = endpoint, errorCode = null,
                 audioOutput = AudioOutputStatus(reason = if ("audio_pcm_v1" in ready.capabilities) "syncing" else "audio_not_negotiated"))
             val session = ConversationSession(ready, nowMillis)
-            val record = Active(credentials, session, socket)
+            val record = Active(credentials, session, socket).also { owned = it }
             record.thoughts = ThoughtState(ready, nowMillis).also { it.visible(visibleThoughtIds) }
             active = record
             publishThoughts()
@@ -587,7 +599,7 @@ class ConnectionRepository(
         } catch (error: ProtocolException) {
             throw authenticatedSessionFailure(error.code)
         } finally {
-            val closing = active
+            val closing = owned
             closing?.mediaCurrent?.set(false)
             closing?.extensions?.shutdown()
             closing?.character?.shutdown(CharacterStopReason.TRANSIENT_DISCONNECT)
@@ -604,16 +616,19 @@ class ConnectionRepository(
     }
 
     private suspend fun clearCharacterCache() {
+        characterPresentation.discard(CharacterStopReason.REGISTRATION_CHANGE)
         try { characterPlatform?.clearCache() }
         catch (cancel: CancellationException) { throw cancel }
         catch (_: Exception) { throw ConnectionException("character_cache_cleanup_failed") }
     }
 
-    private suspend fun stopConnection() {
+    private suspend fun stopConnection(reason: CharacterStopReason) {
+        characterPresentation.pause()
         generation++
         active?.mediaCurrent?.set(false)
         active?.extensions?.shutdown()
-        active?.character?.shutdown(CharacterStopReason.CLOSED)
+        active?.character?.shutdown(reason)
+        if (!reason.mayRetain) characterPresentation.discard(reason)
         connection?.cancelAndJoin()
         connection = null
         stage(ConnectionStage.IDLE)
