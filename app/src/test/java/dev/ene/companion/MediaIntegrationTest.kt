@@ -27,10 +27,13 @@ class MediaIntegrationTest {
             val sent = mutableListOf<WireMessage>()
             val commands = mutableListOf<Pair<String, JsonObject>>()
             val states = mutableListOf<CharacterViewState>()
+            val presentation = CharacterPresentationOwner(states::add)
+            var presentationGeneration = 0L
             var mounted: CharacterCache.CachedCharacter? = null
             var opened = 0
             var closed = 0
             val renderer = object : CharacterRenderer {
+                override fun bindPresentation(generation: Long) { presentationGeneration = generation }
                 override fun show(snapshot: CharacterSnapshot, character: CharacterCache.CachedCharacter?) {
                     mounted?.close(); mounted = character?.retain()
                 }
@@ -51,7 +54,7 @@ class MediaIntegrationTest {
                         override fun close() { if (!done) { done = true; closed++ } }
                     }
                 }, send = { sent += it; true }, nowMillis = { testScheduler.currentTime },
-                isPublicAssistant = { it == audioId(4) }, onState = states::add)
+                isPublicAssistant = { it == audioId(4) }, presentation = presentation)
             val audioMedia = TestAudioMedia()
             val audioPlatform = AudioTestPlatform()
             val audio = ExtensionSession(ready, backgroundScope, { audioMedia }, audioPlatform,
@@ -61,16 +64,16 @@ class MediaIntegrationTest {
                 val extension = ExtensionsReady(1, audioId(1), audioId(2), capabilities)
                 character.attach(renderer); character.resumed(true); character.baseState(audioId(1), audioId(3), true); character.receive(extension)
                 audio.resumed(true); audio.baseState(audioId(1), audioId(3), true); audio.receive(extension)
-                advanceTimeBy(300); runCurrent(); character.event(renderer, CharacterEvent("ready", model.modelVersion))
+                advanceTimeBy(300); runCurrent(); character.event(renderer, CharacterEvent("ready", model.modelVersion, presentationGeneration = presentationGeneration))
                 character.openSettings(); character.previewSettings("head_pat_strength", JsonPrimitive(1.8), false); character.submitSettings()
                 val patch = sent.filterIsInstance<CharacterSettingsPatch>().single()
                 model = CharacterSnapshot.parse(JsonObject(model.json + mapOf("state_revision" to JsonPrimitive(2),
                     "settings_revision" to JsonPrimitive(2))).toString())
                 character.receive(CharacterSettingsResult(1, audioId(1), audioId(2), patch.command_id, "conflict", 2, "revision_conflict"))
-                advanceTimeBy(300); runCurrent(); character.event(renderer, CharacterEvent("ready", model.modelVersion))
+                advanceTimeBy(300); runCurrent(); character.event(renderer, CharacterEvent("ready", model.modelVersion, presentationGeneration = presentationGeneration))
                 assertFalse(states.last().settings.busy)
                 character.closeSettings()
-                character.event(renderer, CharacterEvent("head_pat_input", input = HeadPatInput(model.modelVersion!!, audioId(100 + cycle), 0, "start", .4)))
+                character.event(renderer, CharacterEvent("head_pat_input", input = HeadPatInput(model.modelVersion!!, audioId(100 + cycle), 0, "start", .4), presentationGeneration = presentationGeneration))
                 assertEquals(1, sent.filterIsInstance<HeadPat>().count { it.phase == "start" })
                 audio.receive(AudioOffer(1, audioId(1), audioId(2), audioId(3), audioId(4), audioId(5), audioId(6), 24000, 1, 2, 2000))
                 runCurrent(); audioMedia.chunks.send(ByteArray(9600) { if (it % 2 == 0) 0x10 else 0x27 }); runCurrent()
@@ -83,7 +86,7 @@ class MediaIntegrationTest {
                     payload = "{\"synthetic_replacement\":$cycle}".toByteArray()
                     model = CharacterSnapshot.parse(CharacterFixtures.changed(CharacterFixtures.manifest(payload, revision = 3), "settings_revision", JsonPrimitive(3)))
                     character.receive(CharacterChanged(1, audioId(1), audioId(2), 3, model.modelVersion, "model_changed"))
-                    advanceTimeBy(300); runCurrent(); character.event(renderer, CharacterEvent("ready", model.modelVersion))
+                    advanceTimeBy(300); runCurrent(); character.event(renderer, CharacterEvent("ready", model.modelVersion, presentationGeneration = presentationGeneration))
                 }
                 assertEquals(1, sent.filterIsInstance<HeadPat>().count { it.phase == "cancel" })
             } finally {

@@ -12,6 +12,17 @@ import org.junit.rules.TemporaryFolder
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class CharacterSessionTest {
+    @Test fun backgroundShutdownKeepsPreparedPresentationButClosesConnectionResources() = runTest {
+        val f = Fixture(this) { result() }
+        f.activate(); advanceTimeBy(300); runCurrent(); f.rendered()
+        f.session.resumed(false)
+        f.session.shutdown(CharacterStopReason.BACKGROUND)
+        f.session.closeAndJoin()
+        assertTrue(f.states.last().retainRenderer)
+        assertFalse(f.states.last().presentationAllowed)
+        assertTrue(f.media.all { it.closed })
+        f.presentation.discard(CharacterStopReason.CLOSED)
+    }
     @Test fun resumedSessionDoesNotShowBeforeItsNewSnapshotIsApplied() = runTest {
         val f = Fixture(this) { result() }
         f.activate(); advanceTimeBy(300); runCurrent(); f.rendered()
@@ -43,6 +54,8 @@ class CharacterSessionTest {
         override fun close() { closed = true }
     }
     private open class Renderer : CharacterRenderer {
+        var generation = 0L
+        override fun bindPresentation(generation: Long) { this.generation = generation }
         val snapshots = mutableListOf<CharacterSnapshot>()
         val commands = mutableListOf<Pair<String, JsonObject>>()
         val presentations = mutableListOf<Pair<CharacterPlacement, Boolean>>()
@@ -117,7 +130,7 @@ class CharacterSessionTest {
                 "settings_revision" to JsonPrimitive(revision), "state_revision" to JsonPrimitive(revision))).toString())
             f.session.receive(CharacterChanged(1, audioId(1), audioId(2), revision, model.modelVersion, "settings_changed"))
             advanceTimeBy(300); runCurrent()
-            f.session.event(f.renderer, CharacterEvent("ready", model.modelVersion))
+            f.session.event(f.renderer, CharacterEvent("ready", model.modelVersion, presentationGeneration = f.renderer.generation))
             assertEquals(all, f.renderer.snapshots.last().json["settings"])
             assertEquals(p to true, f.renderer.presentations.last())
             f.session.openSettings(); f.session.previewSettings("head_pat_strength", JsonPrimitive(1.1), false)
@@ -209,20 +222,21 @@ class CharacterSessionTest {
         private val sessionReady = ready.copy(capabilities = ready.capabilities +
             (if (controls) listOf("character_controls_v1") else emptyList()) + (if (chat) listOf("chat_actions_v1") else emptyList()))
         val states = mutableListOf<CharacterViewState>()
+        val presentation = CharacterPresentationOwner(states::add)
         val media = mutableListOf<Media>()
         val sent = mutableListOf<WireMessage>()
         val renderer = Renderer()
         val session = CharacterSession(sessionReady, "1".repeat(64), test.backgroundScope,
             CharacterPlatform(true) { _, _, _ -> loader() },
             mediaFactory = { _, _ -> Media().also(media::add) }, send = { sent += it; true },
-            nowMillis = { test.testScheduler.currentTime }, isPublicAssistant = { it == audioId(4) }, onState = states::add)
+            nowMillis = { test.testScheduler.currentTime }, isPublicAssistant = { it == audioId(4) }, presentation = presentation)
         fun activate() {
             session.attach(renderer)
             session.resumed(true)
             session.baseState(audioId(1), audioId(3), true)
             session.receive(ExtensionsReady(1, audioId(1), audioId(2), sessionReady.capabilities))
         }
-        fun rendered() = session.event(renderer, CharacterEvent("ready", snapshot().modelVersion))
+        fun rendered() = session.event(renderer, CharacterEvent("ready", snapshot().modelVersion, presentationGeneration = renderer.generation))
         fun action(number: Long) = CharacterAction(1, audioId(1), audioId(2), snapshot().modelVersion!!, number, "gesture", "nod", 0)
     }
 
@@ -344,7 +358,7 @@ class CharacterSessionTest {
         f.session.receive(f.action(4))
         val replacement = Renderer()
         f.session.attach(replacement)
-        f.session.event(replacement, CharacterEvent("ready", snapshot().modelVersion))
+        f.session.event(replacement, CharacterEvent("ready", snapshot().modelVersion, presentationGeneration = replacement.generation))
         assertEquals(1, replacement.snapshots.size)
         val mouth = replacement.commands.last { it.first == "playback" }.second
         assertEquals(123L, mouth.getValue("played_ms").jsonPrimitive.long)
@@ -372,7 +386,7 @@ class CharacterSessionTest {
             override fun post(type: String, value: JsonObject) { throw IllegalStateException("합성 렌더러 오류") }
         }
         f.session.attach(broken)
-        f.session.event(broken, CharacterEvent("ready", snapshot().modelVersion))
+        f.session.event(broken, CharacterEvent("ready", snapshot().modelVersion, presentationGeneration = broken.generation))
         assertEquals("error", f.states.last().status)
         assertTrue(f.sent.isEmpty())
         f.session.closeAndJoin()
@@ -382,10 +396,10 @@ class CharacterSessionTest {
         val f = Fixture(this, controls = true) { result() }
         val input = HeadPatInput(snapshot().modelVersion!!, audioId(60), 0, "start", .5)
         f.activate(); advanceTimeBy(200); runCurrent()
-        f.session.event(f.renderer, CharacterEvent("head_pat_input", input = input))
+        f.session.event(f.renderer, CharacterEvent("head_pat_input", input = input, presentationGeneration = f.renderer.generation))
         assertTrue(f.sent.none { it is HeadPat })
         f.rendered()
-        f.session.event(f.renderer, CharacterEvent("head_pat_input", input = input))
+        f.session.event(f.renderer, CharacterEvent("head_pat_input", input = input, presentationGeneration = f.renderer.generation))
         assertEquals("start", (f.sent.single() as HeadPat).phase)
         f.session.resumed(false, changingConfigurations = true)
         assertEquals(listOf("start", "cancel"), f.sent.filterIsInstance<HeadPat>().map { it.phase })
@@ -397,7 +411,7 @@ class CharacterSessionTest {
         val plain = Fixture(this) { result() }
         plain.activate(); advanceTimeBy(200); runCurrent(); plain.rendered()
         val input = HeadPatInput(snapshot().modelVersion!!, audioId(61), 0, "start", .5)
-        plain.session.event(plain.renderer, CharacterEvent("head_pat_input", input = input))
+        plain.session.event(plain.renderer, CharacterEvent("head_pat_input", input = input, presentationGeneration = plain.renderer.generation))
         assertTrue(plain.sent.isEmpty())
         plain.session.closeAndJoin()
         val f = Fixture(this, controls = true) { result() }

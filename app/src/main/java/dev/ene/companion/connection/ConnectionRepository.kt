@@ -39,7 +39,7 @@ class ConnectionRepository(
     val characterPlacement = placementController?.state ?: MutableStateFlow(CharacterPlacementState(loaded = true)).asStateFlow()
     private var characterPanelVisible = true
     private var characterRenderer: CharacterRenderer? = null
-    private var characterViewGeneration = 0L
+    private val characterPresentation = CharacterPresentationOwner { mutableCharacterState.value = it }
     private var foreground = false
     private var resumedActivity = false
     private var generation = 0L
@@ -54,7 +54,6 @@ class ConnectionRepository(
         val mediaCurrent = AtomicBoolean(true)
         var extensions: ExtensionSession? = null
         var character: CharacterSession? = null
-        var characterLocalGeneration = -1L
         var thoughts: ThoughtState? = null
     }
     private var active: Active? = null
@@ -86,23 +85,29 @@ class ConnectionRepository(
         if (value && !resumedActivity) command { chatDisplay.refresh(); publishChatDisplay() }
         resumedActivity = value
         active?.extensions?.resumed(value, changingConfigurations)
+        characterPresentation.resumed(value)
         active?.character?.resumed(value, changingConfigurations)
     }
 
     fun attachCharacter(renderer: CharacterRenderer) {
         characterRenderer = renderer
+        characterPresentation.attach(renderer)
         active?.character?.attach(renderer)
     }
     fun detachCharacter(renderer: CharacterRenderer) {
         if (characterRenderer !== renderer) return
         active?.character?.detach(renderer)
+        characterPresentation.detach(renderer)
         characterRenderer = null
     }
     fun characterEvent(renderer: CharacterRenderer, event: CharacterEvent) {
         if (characterRenderer === renderer) active?.character?.event(renderer, event)
     }
     fun characterFailed(renderer: CharacterRenderer, code: String) {
-        if (characterRenderer === renderer) active?.character?.rendererFailed(renderer, code)
+        if (characterRenderer === renderer) {
+            active?.character?.rendererFailed(renderer, code)
+            characterPresentation.rendererFailed(renderer, code)
+        }
     }
     fun retryCharacter() { active?.character?.retry() }
     fun openCharacterSettings() { active?.character?.openSettings() }
@@ -462,20 +467,14 @@ class ConnectionRepository(
                     mediaFactory = { context, current -> transport.character(credentials.token, context) { record.mediaCurrent.get() && current() } },
                     send = socket::send, nowMillis = nowMillis,
                     isPublicAssistant = { id -> mutableState.value.messages.any { it.id == id && it.role == "assistant" } },
-                    onState = { value -> if (active === record) {
-                        if (record.characterLocalGeneration != value.viewGeneration) {
-                            record.characterLocalGeneration = value.viewGeneration
-                            characterViewGeneration++
-                        }
-                        mutableCharacterState.value = value.copy(viewGeneration = characterViewGeneration)
-                    } },
+                    presentation = characterPresentation,
                 ).also {
                     record.character = it
                     it.placement(characterPlacement.value); it.panelVisible(characterPanelVisible)
                     it.resumed(resumedActivity); characterRenderer?.let(it::attach)
                 }
             }
-            if (character == null) mutableCharacterState.value = CharacterViewState("unsupported", viewGeneration = ++characterViewGeneration)
+            if (character == null) characterPresentation.discard(CharacterStopReason.UNSUPPORTED)
             val extensions = audioPlatform?.takeIf { "audio_pcm_v1" in ready.capabilities }?.let { platform ->
                 ExtensionSession(ready, CoroutineScope(currentCoroutineContext()),
                     mediaFactory = { context -> transport.audio(credentials.token, context, record.mediaCurrent::get) },
@@ -544,7 +543,7 @@ class ConnectionRepository(
                 record.thoughts?.pause()
                 publishThoughts()
                 extensions?.shutdown()
-                character?.shutdown()
+                character?.shutdown(CharacterStopReason.TRANSIENT_DISCONNECT)
                 chatActions.disconnected()
                 chatDisplay.disconnected()
                 publishChatDisplay()
@@ -591,7 +590,7 @@ class ConnectionRepository(
             val closing = active
             closing?.mediaCurrent?.set(false)
             closing?.extensions?.shutdown()
-            closing?.character?.shutdown()
+            closing?.character?.shutdown(CharacterStopReason.TRANSIENT_DISCONNECT)
             closing?.extensions?.closeAndJoin()
             closing?.character?.closeAndJoin()
             if (active === closing) active = null
@@ -614,7 +613,7 @@ class ConnectionRepository(
         generation++
         active?.mediaCurrent?.set(false)
         active?.extensions?.shutdown()
-        active?.character?.shutdown()
+        active?.character?.shutdown(CharacterStopReason.CLOSED)
         connection?.cancelAndJoin()
         connection = null
         stage(ConnectionStage.IDLE)
@@ -628,7 +627,8 @@ class ConnectionRepository(
     override fun close() {
         active?.mediaCurrent?.set(false)
         active?.extensions?.shutdown()
-        active?.character?.shutdown()
+        active?.character?.shutdown(CharacterStopReason.CLOSED)
+        characterPresentation.discard(CharacterStopReason.CLOSED)
         scope.cancel()
     }
 

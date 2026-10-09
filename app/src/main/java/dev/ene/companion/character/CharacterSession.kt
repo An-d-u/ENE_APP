@@ -6,7 +6,7 @@ import kotlinx.serialization.json.*
 import java.util.concurrent.atomic.AtomicBoolean
 
 /** 현재 연결의 캐릭터만 소유한다. Main 직렬 상태와 IO 취소용 원자 플래그를 분리한다. */
-class CharacterSession(
+internal class CharacterSession(
     private val ready: Ready,
     private val identity: String,
     parentScope: CoroutineScope,
@@ -15,8 +15,9 @@ class CharacterSession(
     private val send: (WireMessage) -> Boolean,
     private val nowMillis: () -> Long,
     private val isPublicAssistant: (String) -> Boolean,
-    private val onState: (CharacterViewState) -> Unit,
+    private val presentation: CharacterPresentationOwner,
 ) {
+    private var binding = presentation.bind(identity)
     private val ownerJob = SupervisorJob(parentScope.coroutineContext[Job])
     private val scope = CoroutineScope(parentScope.coroutineContext + ownerJob)
     private val capabilities = ready.capabilities.toSet()
@@ -70,6 +71,7 @@ class CharacterSession(
     fun resumed(value: Boolean, changingConfigurations: Boolean = false) {
         if (closed) return
         activeScreen = value
+        presentation.resumed(value)
         if (!value) {
             settings?.available(false); publishSettings()
             headPat?.cancel()
@@ -152,6 +154,7 @@ class CharacterSession(
         if (closed) return
         if (renderer !== value) { headPat?.cancel(); settings?.close() }
         renderer = value; sequence.detached(); lastMouth = null; lastPresentation = null
+        presentation.attach(value)
         publish(state.status, state.errorCode)
         if (available()) display()
     }
@@ -161,10 +164,11 @@ class CharacterSession(
         settings?.close(); publishSettings()
         headPat?.cancel()
         renderer = null; sequence.detached(); lastMouth = null; lastPresentation = null
+        presentation.detach(value)
     }
 
     fun event(source: CharacterRenderer, event: CharacterEvent) {
-        if (closed || renderer !== source) return
+        if (closed || renderer !== source || !presentation.event(source, event)) return
         if (event.type == "head_pat_input") {
             val input = event.input ?: return
             if (presentationAllowed() && state.status == "ready" && headPat != null) headPat?.input(input)
@@ -204,7 +208,9 @@ class CharacterSession(
     fun retry() {
         if (closed) return
         failed = false
-        state = state.copy(viewGeneration = state.viewGeneration + 1)
+        presentation.discard(CharacterStopReason.EXPLICIT_RELOAD)
+        binding = presentation.bind(identity)
+        renderer = null; lastPresentation = null
         if (available()) requestLoad()
     }
 
@@ -252,7 +258,7 @@ class CharacterSession(
         val snapshot = sequence.snapshot ?: loaded.snapshot
         publish(if (snapshot.status == "ready") "rendering" else snapshot.status)
         if (!placement.loaded) return
-        render { it.show(snapshot, loaded.character) }
+        presentation.show(binding, snapshot, loaded.character)
     }
 
     private fun publishMouth(force: Boolean = false) {
@@ -273,11 +279,11 @@ class CharacterSession(
             presentationAllowed = presentationAllowed(),
             settings = settingsView(status))
         state = next
-        if (next != previous) onState(next)
+        if (next != previous) presentation.update(binding, next)
         val presentation = placement.placement to next.presentationAllowed
         if (renderer != null && lastPresentation != presentation) {
             lastPresentation = presentation
-            render { it.present(presentation.first, presentation.second) }
+            this.presentation.present(binding, presentation.first, presentation.second)
         }
         val snapshot = sequence.snapshot
         val enabled = snapshot?.json?.get("settings")?.jsonObject?.get("enable_head_pat")?.jsonPrimitive?.booleanOrNull ?: true
@@ -294,7 +300,7 @@ class CharacterSession(
 
     private fun publishSettings() {
         val value = settingsView()
-        if (state.settings != value) { state = state.copy(settings = value); onState(state) }
+        if (state.settings != value) { state = state.copy(settings = value); presentation.update(binding, state) }
     }
 
     fun openSettings() { if (settingsView().available) settings?.open(); publishSettings() }
@@ -306,8 +312,8 @@ class CharacterSession(
     fun submitSettings() { if (settingsView().available) settings?.submit(); publishSettings() }
 
     private fun render(block: (CharacterRenderer) -> Unit) {
-        val target = renderer ?: return
-        try { block(target) } catch (_: Exception) { fail("character_render_failed") }
+        if (renderer == null) return
+        presentation.render(binding, block)
     }
 
     private fun closeMedia() { runCatching { media?.close() } }
@@ -317,21 +323,23 @@ class CharacterSession(
         failed = true; pending = false; token?.set(false); closeMedia(); download?.cancel()
         headPat?.cancel()
         sequence.detached(); playback.reset()
+        presentation.fail(binding, code)
         publish("error", code)
     }
 
-    fun shutdown() {
+    fun shutdown(reason: CharacterStopReason = CharacterStopReason.CLOSED) {
         if (closed) return
         headPat?.cancel()
         closed = true; pending = false; token?.set(false); closeMedia()
         download?.cancel(); worker?.cancel(); timer.cancel()
-        runCatching { renderer?.clear() }
+        settings?.close()
+        presentation.release(binding, reason)
         currentLoad?.close(); currentLoad = null; renderer = null
         sequence.detached(); playback.reset(); publish("unavailable")
     }
 
     suspend fun closeAndJoin() = withContext(NonCancellable) {
-        shutdown(); worker?.join(); download?.join(); timer.join(); ownerJob.cancelAndJoin()
+        shutdown(CharacterStopReason.CLOSED); worker?.join(); download?.join(); timer.join(); ownerJob.cancelAndJoin()
     }
 
     private fun wire(message: ExtensionMessage) = Json.parseToJsonElement(ProtocolCodec.encode(message)).jsonObject

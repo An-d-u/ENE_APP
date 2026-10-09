@@ -1,7 +1,5 @@
 package dev.ene.companion.character
 
-import kotlinx.serialization.json.JsonObject
-
 internal data class CharacterPresentationBinding(val sequence: Long, val identity: String)
 
 internal enum class CharacterStopReason {
@@ -86,13 +84,21 @@ internal class CharacterPresentationOwner(private val onState: (CharacterViewSta
         publish()
     }
 
-    fun post(value: CharacterPresentationBinding, type: String, message: JsonObject) {
-        if (isCurrent(value) && state.presentationAllowed) render { it.post(type, message) }
+    fun render(value: CharacterPresentationBinding, block: (CharacterRenderer) -> Unit) {
+        if (isCurrent(value)) render(block)
+    }
+
+    fun fail(value: CharacterPresentationBinding, code: String) {
+        if (!isCurrent(value)) return
+        discard(CharacterStopReason.RENDERER_FAILURE)
+        binding = value
+        sessionState = CharacterViewState("error", code)
+        publish()
     }
 
     fun event(source: CharacterRenderer, event: CharacterEvent): Boolean {
         if (renderer !== source) return false
-        if (event.type == "document_error") {
+        if (event.type == "document_error" || event.type == "error" && event.code == "character_initialization_failed") {
             rendererFailed(source, event.code ?: "character_render_failed")
             return false
         }
