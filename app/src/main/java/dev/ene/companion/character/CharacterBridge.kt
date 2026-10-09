@@ -5,7 +5,8 @@ import kotlinx.serialization.json.*
 import java.io.Closeable
 import java.util.UUID
 
-data class CharacterEvent(val type: String, val modelVersion: String? = null, val code: String? = null, val input: HeadPatInput? = null)
+data class CharacterEvent(val type: String, val modelVersion: String? = null, val code: String? = null, val input: HeadPatInput? = null,
+    val presentationGeneration: Long? = null)
 
 /** WebView의 출처/프레임 확인 뒤에도 문서 세대와 작은 허용 메시지만 수락한다. Main 전용. */
 class CharacterBridge(val generation: String = UUID.randomUUID().toString()) : Closeable {

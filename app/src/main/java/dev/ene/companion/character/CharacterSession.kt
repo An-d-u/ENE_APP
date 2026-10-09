@@ -49,7 +49,7 @@ class CharacterSession(
         platform.supported && "character_v1" in capabilities
 
     private fun presentationAllowed() = available() && panelVisible && placement.loaded &&
-        state.status in setOf("rendering", "ready") && sequence.snapshot?.status == "ready"
+        state.status == "ready" && sequence.snapshot?.status == "ready"
 
     fun panelVisible(value: Boolean) {
         if (closed || panelVisible == value) return

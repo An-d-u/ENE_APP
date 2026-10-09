@@ -12,6 +12,18 @@ import org.junit.rules.TemporaryFolder
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class CharacterSessionTest {
+    @Test fun resumedSessionDoesNotShowBeforeItsNewSnapshotIsApplied() = runTest {
+        val f = Fixture(this) { result() }
+        f.activate(); advanceTimeBy(300); runCurrent(); f.rendered()
+        f.session.resumed(false)
+        f.session.resumed(true); advanceTimeBy(300); runCurrent()
+        assertTrue(f.states.last().retainRenderer)
+        assertFalse(f.states.last().presentationAllowed)
+        assertFalse(f.renderer.presentations.last().second)
+        f.rendered()
+        assertTrue(f.states.last().presentationAllowed)
+        f.session.closeAndJoin()
+    }
     @get:Rule val temporary = TemporaryFolder()
     private val ready = Ready(audioId(9), audioId(1), audioId(3), 1, listOf("audio_pcm_v1", "character_v1"))
     private val payload = "{}".toByteArray()

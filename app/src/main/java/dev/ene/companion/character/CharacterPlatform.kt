@@ -6,6 +6,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.JsonObject
 
 interface CharacterRenderer {
+    fun bindPresentation(generation: Long) = Unit
     fun present(placement: CharacterPlacement, visible: Boolean) = Unit
     fun show(snapshot: CharacterSnapshot, character: CharacterCache.CachedCharacter?)
     fun post(type: String, value: JsonObject)
