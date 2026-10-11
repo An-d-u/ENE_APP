@@ -15,6 +15,8 @@ data class AudioOutputStatus(
     val reason: String? = null,
 )
 
+data class ConversationScope(val registrationId: String, val serverEpoch: String, val conversationId: String)
+
 data class ConnectionViewState(
     val phase: ConnectionPhase = ConnectionPhase.UNREGISTERED,
     val registered: Boolean = false,
@@ -29,6 +31,9 @@ data class ConnectionViewState(
     val chatActions: ChatActionsViewState = ChatActionsViewState(),
     val thoughts: Map<String, ThoughtContent> = emptyMap(),
     val chatDisplay: ChatDisplayViewState = ChatDisplayViewState(),
+    val chatProgress: ChatProgressViewState = ChatProgressViewState(),
+    val conversationScope: ConversationScope? = null,
+    val conversationRevision: Long? = null,
 ) {
     val canSend: Boolean get() = phase == ConnectionPhase.CONNECTED && processing.phase == "idle" && sendState == null && !chatActions.busy && draft.isNotBlank()
     override fun toString(): String = "ConnectionViewState(phase=$phase)"

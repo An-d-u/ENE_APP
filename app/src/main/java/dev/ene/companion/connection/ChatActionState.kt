@@ -19,6 +19,7 @@ data class ChatActionsViewState(
     val editReason: String = "syncing", val rerollReason: String = "syncing",
     val busy: Boolean = false, val progress: String? = null, val notice: String? = null,
     val editor: MessageEditor? = null,
+    val requestId: String? = null,
 ) {
     override fun toString(): String = "ChatActionsViewState(supported=$supported, busy=$busy)"
 }
@@ -227,7 +228,7 @@ internal class ChatActionState(
         }
         return ChatActionsViewState(supported, state?.user_message_id, state?.assistant_message_id,
             canEdit, canReroll, localReason ?: state?.edit_reason ?: "syncing", localReason ?: state?.reroll_reason ?: "syncing",
-            busy, if (refreshing) "confirming" else pending?.state, notice, editable)
+            busy, if (refreshing) "confirming" else pending?.state, notice, editable, pending?.message?.request_id)
     }
 
     fun openEditor(targetId: String) {

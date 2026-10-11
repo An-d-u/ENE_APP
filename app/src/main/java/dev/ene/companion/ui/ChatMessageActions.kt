@@ -47,12 +47,25 @@ internal fun chatActionReason(code: String?): String = when (code) {
     else -> "작업을 마치지 못했습니다. 현재 대화를 확인한 뒤 다시 시도해 주세요."
 }
 
-internal fun chatActionProgress(state: ChatActionsViewState, processing: String): String? = when {
-    state.progress == "confirming" -> "변경된 대화를 확인하고 있습니다."
-    state.progress in setOf("reserved", "accepted") -> "답변을 다시 생성하고 있습니다."
-    state.progress != null -> "수정·리롤 요청 결과를 확인하고 있습니다."
-    processing != "idle" -> "생각 중…"
-    else -> null
+internal fun chatActionProgress(state: ConnectionViewState): String? {
+    if (state.phase != ConnectionPhase.CONNECTED) return null
+    val actions = state.chatActions
+    if (actions.progress == "confirming") return "변경된 대화를 확인하고 있습니다."
+    val progress = state.chatProgress
+    if (progress.status == "ready" && state.processing.phase != "idle" &&
+        progress.requestId != null && progress.requestId == state.processing.request_id) {
+        when (progress.phase) {
+            "preparing" -> return "요청을 준비하고 있습니다."
+            "generating" -> return if (actions.requestId == progress.requestId)
+                "답변을 다시 생성하고 있습니다." else "생각 중…"
+            "text_ready" -> return null
+        }
+    }
+    return when {
+        actions.progress != null -> "수정·리롤 요청 결과를 확인하고 있습니다."
+        state.processing.phase != "idle" -> "처리 중…"
+        else -> null
+    }
 }
 
 private data class ExpandedThought(val message: PublicMessage, val content: ThoughtContent) {
@@ -73,7 +86,7 @@ fun ChatHistory(state: ConnectionViewState, modifier: Modifier = Modifier, onEdi
                 listState: LazyListState = rememberLazyListState(),
                 footer: @Composable () -> Unit = {}) {
     val nearEnd by remember { derivedStateOf { !listState.canScrollForward } }
-    val progress = chatActionProgress(state.chatActions, state.processing.phase)
+    val progress = chatActionProgress(state)
     val split = state.chatDisplay.splitEnabled
     // 분할 결과는 현재 대화에만 보관하고, 변경되지 않은 원문은 재사용한다.
     val chunkCache = remember { mutableMapOf<String, MessageChunks>() }
