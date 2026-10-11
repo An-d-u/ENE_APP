@@ -17,6 +17,8 @@ internal class DraftOutbox {
     var notice: String? = null
         private set
     private var version = 0L
+    val revision: Long get() = version
+    fun acceptSnapshot(expectedVersion: Long) { if (version == expectedVersion) { draft = ""; version++ } }
     private var pending: Pending? = null
     val state: String? get() = pending?.state
     val awaitingResult: Boolean get() = pending?.let { !it.unknown && (it.querying || it.state == "sending") } == true

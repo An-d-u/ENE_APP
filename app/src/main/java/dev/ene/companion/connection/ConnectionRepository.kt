@@ -5,6 +5,7 @@ import dev.ene.companion.protocol.*
 import dev.ene.companion.storage.*
 import dev.ene.companion.audio.AudioPlatform
 import dev.ene.companion.character.*
+import dev.ene.companion.input.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -29,6 +30,8 @@ class ConnectionRepository(
     private val characterPlatform: CharacterPlatform? = null,
     private val placementController: CharacterPlacementController? = null,
     private val discovery: PcDiscovery = NoPcDiscovery,
+    private val photoStorage: PhotoStorage? = null,
+    private val recordingPlatform: RecordingPlatform? = null,
 ) : Closeable {
     private val scope = CoroutineScope(SupervisorJob() + dispatcher)
     private val transition = Mutex()
@@ -49,6 +52,10 @@ class ConnectionRepository(
     private var generation = 0L
     private var connection: Job? = null
     private var drafts = DraftOutbox()
+    private val photoDraft = photoStorage?.let { PhotoDraft(it, scope) }
+    val photos = photoDraft?.state ?: MutableStateFlow(PhotoDraftState()).asStateFlow()
+    private val photoOutbox = PhotoOutbox()
+    private var photoTransfer: Job? = null
     private val chatActions = ChatActionState(nowMillis)
     private val chatDisplay = ChatDisplayState(nowMillis)
     private val chatProgress = ChatProgressState(nowMillis)
@@ -60,8 +67,40 @@ class ConnectionRepository(
         var extensions: ExtensionSession? = null
         var character: CharacterSession? = null
         var thoughts: ThoughtState? = null
+        var input: InputSession? = null
+        var inputReady: ExtensionsReady? = null
+        var photoLimitsQuery: String? = null
+        var nextPhotoLimits = 0L
+        var images: ChatImages? = null
+        var inputPhase: String? = null
+        var stt: SttSession? = null
     }
     private var active: Active? = null
+    private var sttDraft: SttDraft? = null
+    private var reviewInput: InputSession? = null
+    private fun draftIdentity() = mutableState.value.conversationScope?.let { "${it.registrationId}/${it.serverEpoch}/${it.conversationId}" }.orEmpty()
+    fun recordingPermissionKey(): Any? = active?.input
+    fun startRecording(expectedConnection: Any? = null): Job = command {
+        if (expectedConnection != null && expectedConnection !== active?.input) return@command
+        if (!resumedActivity || !canAct() || mutableState.value.processing.phase != "idle" || mutableState.value.stt.busy) return@command
+        sttDraft = SttDraft(draftIdentity(), drafts.revision)
+        mutableState.value = mutableState.value.copy(sttReview = null)
+        active?.stt?.start()
+    }
+    fun finishRecording() { active?.stt?.finish() }
+    fun cancelRecording() { active?.stt?.cancel() }
+    fun microphoneDenied() { mutableState.value = mutableState.value.copy(stt = SttView(reason = "microphone_permission")) }
+    fun appendTranscription(): Job = command {
+        if (reviewInput == null || reviewInput !== active?.input || mutableState.value.phase != ConnectionPhase.CONNECTED) {
+            discardTranscription(); return@command
+        }
+        mutableState.value.sttReview?.let { text ->
+            val appended = SttDraft.appendText(drafts.draft, text)
+            if (appended != null) { drafts.edit(appended); mutableState.value = mutableState.value.copy(sttReview = null); publishDraft() }
+            else mutableState.value = mutableState.value.copy(stt = SttView(reason = "text_too_large"))
+        }
+    }
+    fun discardTranscription() { reviewInput = null; mutableState.value = mutableState.value.copy(sttReview = null) }
 
     fun previousExit(value: PreviousExit) {
         diagnostics { copy(previousExit = value) }
@@ -75,6 +114,94 @@ class ConnectionRepository(
 
     init {
         scope.launch { characterPlacement.collect { active?.character?.placement(it) } }
+        scope.launch { photos.collect { publishDraft() } }
+    }
+    fun selectPhotos(sources: List<String>) {
+        if (photoOutbox.pending == null) photoDraft?.select(sources)
+        active?.nextPhotoLimits = 0L
+    }
+    fun removePhoto(id: String) { if (photoOutbox.pending == null) photoDraft?.remove(id) }
+    fun retryPhotos(): Job = command {
+        val record = active ?: return@command
+        if (photoOutbox.canRetry && mutableState.value.phase == ConnectionPhase.CONNECTED && record.session.snapshot?.processing?.phase == "idle") {
+            startPhotoTransfer(record, photoOutbox.retry())
+        }
+    }
+    private fun startPhotoTransfer(record: Active, pending: PhotoOutbox.Pending) {
+        val input = record.input ?: run { photoOutbox.failedBeforeSend(); return }
+        photoTransfer = scope.launch {
+            try {
+                val limits = input.photoLimits()
+                if (!limits.allowed) throw ConnectionException(limits.reason)
+                val refs = pending.photos.map { photo ->
+                    val data = requireNotNull(photoStorage).read(photo)
+                    val slot = input.upload("image", data)
+                    InputImageRef(slot.upload_id, photo.sha256, photo.byteLength, photo.mime)
+                }
+                if (active !== record || record.input !== input || !record.mediaCurrent.get() || record.session.syncing ||
+                    record.pendingBaseHeaders > 0 || record.session.conversationId != input.context.conversationId) throw ConnectionException("conversation_changed")
+                val c = input.context
+                val message = ChatImagesSend(c.registrationGeneration, c.serverEpoch, c.connectionGeneration, c.conversationId,
+                    pending.id, pending.text, refs)
+                // send 반환값만으로 접수를 판단하지 않는다. 다음 연결에서 같은 ID를 조회한다.
+                photoOutbox.sent()
+                record.responseDeadline = nowMillis() + 10_000
+                if (!record.socket.send(message)) record.socket.cancel()
+                input.consumed(refs.map { it.upload_id })
+            } catch (_: TimeoutCancellationException) {
+                photoOutbox.failedBeforeSend()
+                mutableState.value = mutableState.value.copy(inputNotice = "photo_send_failed")
+            } catch (cancel: CancellationException) { photoOutbox.failedBeforeSend(); throw cancel }
+            catch (error: Exception) {
+                photoOutbox.failedBeforeSend()
+                mutableState.value = mutableState.value.copy(inputNotice = (error as? ConnectionException)?.code ?: "photo_send_failed")
+            } finally { input.cancelUploads(); publishDraft() }
+        }
+        publishDraft()
+    }
+    private fun inputSynchronized(record: Active, transport: ConnectionTransport) {
+        val ready = record.inputReady ?: return
+        if (!record.mediaCurrent.get() || record.session.syncing || record.pendingBaseHeaders > 0) return
+        val c = ExtensionContext(ready.registration_generation, record.session.serverEpoch, ready.connection_generation, record.session.conversationId)
+        if (record.input?.context == c) {
+            if (record.inputPhase != record.session.snapshot?.processing?.phase) {
+                record.inputPhase = record.session.snapshot?.processing?.phase
+                if ("chat_images_v1" in ready.capabilities) queryPhotoLimits(record, c)
+            }
+            return
+        }
+        record.images?.close()
+        record.stt?.close()
+        record.input?.close()
+        record.input = InputSession(c, transport.input(record.credentials.token, c) {
+            record.mediaCurrent.get() && record.session.serverEpoch == c.serverEpoch && record.session.conversationId == c.conversationId
+        }, record.socket::send)
+        if ("stt_input_v1" in ready.capabilities && recordingPlatform != null) {
+            record.stt = SttSession(requireNotNull(record.input), recordingPlatform, scope, record.socket::send,
+                publish = { if (active === record) mutableState.value = mutableState.value.copy(stt = it) },
+                result = { text ->
+                    if (active === record && record.mediaCurrent.get()) {
+                        val appended = sttDraft?.append(draftIdentity(), drafts.revision, drafts.draft, text)
+                        if (appended == null) {
+                            reviewInput = record.input
+                            mutableState.value = mutableState.value.copy(sttReview = text)
+                        }
+                        else { drafts.edit(appended); publishDraft() }
+                    }
+                })
+        }
+        if ("chat_images_v1" in ready.capabilities) {
+            record.images = ChatImages(requireNotNull(record.input), scope, record.socket::send, nowMillis) {
+                if (active === record) mutableState.value = mutableState.value.copy(chatImages = it)
+            }
+            queryPhotoLimits(record, c)
+        }
+    }
+    private fun queryPhotoLimits(record: Active, c: ExtensionContext) {
+        // 응답이 없으면 자동 반복하지 않는다. 응답 성공 또는 사용자의 재선택으로만 갱신한다.
+        record.nextPhotoLimits = Long.MAX_VALUE
+        val query = java.util.UUID.randomUUID().toString().also { record.photoLimitsQuery = it }
+        record.socket.send(ChatImagesLimitsRequest(c.registrationGeneration, c.serverEpoch, c.connectionGeneration, c.conversationId, query))
     }
     fun characterPanelVisible(value: Boolean) {
         characterPanelVisible = value
@@ -87,6 +214,7 @@ class ConnectionRepository(
 
     /** Activity의 Main 콜백에서 즉시 호출한다. 느린 저장 작업의 mutex 뒤로 미루지 않는다. */
     fun activityResumed(value: Boolean, changingConfigurations: Boolean = false) {
+        if (!value) active?.stt?.cancel()
         if (value && !resumedActivity) command { chatDisplay.refresh(); publishChatDisplay() }
         resumedActivity = value
         active?.extensions?.resumed(value, changingConfigurations)
@@ -164,6 +292,13 @@ class ConnectionRepository(
     fun sendDraft(): Job = command {
         val current = active ?: return@command
         if (!mutableState.value.canSend || current.session.syncing || current.pendingBaseHeaders > 0 || !current.mediaCurrent.get()) return@command
+        if (photos.value.images.isNotEmpty()) {
+            if (drafts.draft.toByteArray(Charsets.UTF_8).size > 16384) throw ConnectionException("text_too_large")
+            val input = current.input ?: return@command
+            val pending = photoOutbox.create(CharacterRepository.identity(current.credentials), input.context, drafts.draft, drafts.revision, photos.value.images)
+            startPhotoTransfer(current, pending)
+            return@command
+        }
         val message = drafts.create(current.credentials, current.session)
         current.responseDeadline = nowMillis() + 10_000
         publishDraft()
@@ -175,7 +310,7 @@ class ConnectionRepository(
 
     private fun canAct(): Boolean = active?.let {
         mutableState.value.phase == ConnectionPhase.CONNECTED && !it.session.syncing &&
-            it.mediaCurrent.get() && it.pendingBaseHeaders == 0 && drafts.state == null && !chatActions.view.busy
+            it.mediaCurrent.get() && it.pendingBaseHeaders == 0 && drafts.state == null && photoOutbox.pending == null && !mutableState.value.stt.busy && !chatActions.view.busy
     } == true
 
     fun openMessageEditor(targetId: String): Job = command {
@@ -202,6 +337,8 @@ class ConnectionRepository(
     }
 
     private fun syncRequest(record: Active): SyncRequest = if (chatActions.hasPending) chatActions.syncRequest()
+        else if (photoOutbox.pending != null) photoOutbox.sync(CharacterRepository.identity(record.credentials),
+            ExtensionContext(record.credentials.generation, record.session.serverEpoch, "", record.session.conversationId))
         else drafts.syncRequest(record.credentials, record.session)
 
     private fun pumpChatActions(record: Active) {
@@ -221,11 +358,12 @@ class ConnectionRepository(
 
     private fun publishDraft() {
         val actions = chatActions.view.let { value ->
-            if (drafts.state == null && mutableState.value.phase == ConnectionPhase.CONNECTED) value
+            if (drafts.state == null && photoOutbox.pending == null && mutableState.value.phase == ConnectionPhase.CONNECTED) value
             else value.copy(canEdit = false, canReroll = false,
                 editReason = "busy", rerollReason = "busy", editor = value.editor?.copy(canSubmit = false))
         }
-        mutableState.value = mutableState.value.copy(draft = drafts.draft, sendState = drafts.state,
+        mutableState.value = mutableState.value.copy(draft = drafts.draft, sendState = drafts.state ?: photoOutbox.pending?.let { if (it.accepted) "accepted" else "photo_sending" },
+            photoCount = photos.value.images.size, photoPreparing = photos.value.preparing, photoRetry = photoOutbox.canRetry,
             chatActions = actions, errorCode = drafts.notice ?: mutableState.value.errorCode)
     }
 
@@ -241,6 +379,7 @@ class ConnectionRepository(
     fun forget(): Job = command {
         stopConnection(CharacterStopReason.REGISTRATION_CHANGE)
         drafts = DraftOutbox()
+        photoOutbox.clear(); photoDraft?.reset()
         chatActions.forget()
         chatDisplay.forget()
         chatProgress.forget()
@@ -320,6 +459,7 @@ class ConnectionRepository(
                                     chatActions.forget()
                                     chatDisplay.forget()
                                     chatProgress.forget()
+                                    photoOutbox.clear(); photoDraft?.reset()
                                     publishChatDisplay()
                                     return@withTimeout
                                 }
@@ -413,6 +553,7 @@ class ConnectionRepository(
                 if (!failureRecorded) failed(code)
                 if (code == "authorization_revoked" && error is ConnectionException && error.peerAuthenticated) {
                     drafts = DraftOutbox()
+                    photoOutbox.clear(); photoDraft?.reset()
                     chatActions.forget()
                     chatDisplay.forget()
                     chatProgress.forget()
@@ -471,6 +612,8 @@ class ConnectionRepository(
                 add("message_thoughts_v1")
                 add("chat_display_v1")
                 add("chat_progress_v1")
+                if (photoStorage != null && transport.supportsInput) add("chat_images_v1")
+                if (recordingPlatform != null && transport.supportsInput) add("stt_input_v1")
                 if (audioPlatform != null && transport.supportsAudio) add("audio_pcm_v1")
                 if (characterPlatform?.supported == true && transport.supportsCharacter) {
                     add("character_v1"); add("character_controls_v1")
@@ -489,6 +632,8 @@ class ConnectionRepository(
             val record = Active(credentials, session, socket).also { owned = it }
             record.thoughts = ThoughtState(ready, nowMillis).also { it.visible(visibleThoughtIds) }
             active = record
+            mutableState.value = mutableState.value.copy(photoSupported = "chat_images_v1" in ready.capabilities,
+                photoAllowed = false, inputNotice = null, sttSupported = "stt_input_v1" in ready.capabilities)
             publishThoughts()
             chatActions.connected(CharacterRepository.identity(credentials), ready)
             chatDisplay.connected(CharacterRepository.identity(credentials), ready)
@@ -530,12 +675,31 @@ class ConnectionRepository(
                 pumpThoughts(record)
                 pumpChatDisplay(record)
                 pumpChatProgress(record)
+                if (!session.syncing && record.pendingBaseHeaders == 0) session.snapshot?.let { record.images?.synchronize(it, visibleThoughtIds) }
+                if (!session.syncing && record.pendingBaseHeaders == 0 && photos.value.images.isNotEmpty() &&
+                    mutableState.value.photoSupported && nowMillis() >= record.nextPhotoLimits) record.input?.let { queryPhotoLimits(record, it.context) }
                 val current = requireNotNull(active)
-                if (!session.syncing && (drafts.awaitingResult || chatActions.awaitingResult)) {
+                if (!session.syncing && (drafts.awaitingResult || chatActions.awaitingResult ||
+                        photoOutbox.pending?.let { it.sent && !it.accepted && !it.unknown } == true)) {
                     val deadline = current.responseDeadline ?: (nowMillis() + 10_000).also { current.responseDeadline = it }
                     if (nowMillis() >= deadline) throw ConnectionException("request_status_timeout")
                 } else current.responseDeadline = null
             }, onExtension = {
+                if (it is ExtensionsReady && it.capabilities.any { cap -> cap in setOf("chat_images_v1", "stt_input_v1") }) {
+                    record.inputReady = it
+                    inputSynchronized(record, transport)
+                }
+                record.input?.receive(it)
+                record.images?.receive(it)
+                record.stt?.receive(it)
+                if (it is AudioOffer) record.stt?.cancel("recording_interrupted")
+                if (it is ChatImagesLimits && it.query_id == record.photoLimitsQuery && record.input?.context?.let { c ->
+                        it.registration_generation == c.registrationGeneration && it.server_epoch == c.serverEpoch &&
+                        it.connection_generation == c.connectionGeneration && it.conversation_id == c.conversationId } == true) {
+                    record.nextPhotoLimits = nowMillis() + 5000
+                    mutableState.value = mutableState.value.copy(photoAllowed = it.allowed,
+                        inputNotice = if (it.allowed) null else it.reason)
+                }
                 if (active === record && record.mediaCurrent.get()) {
                     chatProgress.receive(it)
                     publishChatProgress()
@@ -565,6 +729,11 @@ class ConnectionRepository(
                         else -> error("도달할 수 없는 헤더")
                     }
                     chatActions.baseState(epoch, conversation, false)
+                    if (record.input?.context?.let { it.serverEpoch != epoch || it.conversationId != conversation } == true) {
+                        discardTranscription()
+                        record.stt?.close(); record.input?.close(); record.images?.close()
+                        record.input = null; record.stt = null; record.images = null
+                    }
                     chatProgress.baseState(epoch, conversation, false)
                     publishChatProgress()
                     publishDraft()
@@ -579,7 +748,11 @@ class ConnectionRepository(
                     character?.baseState(headerEpoch, headerConversation, false)
                 }
             }, onClosed = {
+                discardTranscription()
                 record.mediaCurrent.set(false)
+                photoTransfer?.cancel(); record.input?.close()
+                record.images?.close()
+                record.stt?.close()
                 record.thoughts?.pause()
                 publishThoughts()
                 extensions?.shutdown()
@@ -599,7 +772,14 @@ class ConnectionRepository(
                 else chatActions.baseState(session.serverEpoch, session.conversationId, !session.syncing)
                 if (needsSync && !socket.send(syncRequest(record))) throw ConnectionException("connection_closed")
                 if (frame is RequestStatus) {
-                    if (chatActions.hasPending) chatActions.receiveStatus(frame) else drafts.status(frame)
+                    if (photoOutbox.pending?.id == frame.request_id) {
+                        photoOutbox.status(frame)?.let { accepted ->
+                            drafts.acceptSnapshot(accepted.version)
+                            photoDraft?.accepted(accepted.photos.map { photo -> photo.id }.toSet())
+                        }
+                        if (frame.state in setOf("failed", "rejected")) mutableState.value = mutableState.value.copy(inputNotice = frame.code ?: "photo_send_failed")
+                        publishDraft()
+                    } else if (chatActions.hasPending) chatActions.receiveStatus(frame) else drafts.status(frame)
                 }
                 if (active === record && record.mediaCurrent.get() && record.pendingBaseHeaders == 0) {
                     chatProgress.baseState(session.serverEpoch, session.conversationId, !session.syncing, session.snapshot?.processing)
@@ -613,12 +793,14 @@ class ConnectionRepository(
                         conversationScope = ConversationScope(CharacterRepository.identity(credentials), snapshot.serverEpoch, snapshot.conversationId),
                         conversationRevision = snapshot.conversationRevision)
                     chatActions.snapshot(snapshot)
+                    if (snapshot.processing.phase != "idle") record.stt?.cancel("recording_interrupted")
                     if (record.pendingBaseHeaders > 0) chatActions.baseState(headerEpoch, headerConversation, false)
                     drafts.synchronized(snapshot)?.let {
                         active?.responseDeadline = nowMillis() + 10_000
                         if (!socket.send(it)) throw ConnectionException("connection_closed")
                     }
                     onSynchronized()
+                    inputSynchronized(record, transport)
                 }
                 if (pendingSyncHeaders > 0) {
                     extensions?.baseState(headerEpoch, headerConversation, false)
@@ -637,7 +819,12 @@ class ConnectionRepository(
             throw authenticatedSessionFailure(error.code)
         } finally {
             val closing = owned
+            discardTranscription()
             closing?.mediaCurrent?.set(false)
+            photoTransfer?.cancelAndJoin()
+            closing?.input?.close()
+            closing?.images?.close()
+            closing?.stt?.close()
             closing?.extensions?.shutdown()
             closing?.character?.shutdown(CharacterStopReason.TRANSIENT_DISCONNECT)
             closing?.extensions?.closeAndJoin()
@@ -662,6 +849,7 @@ class ConnectionRepository(
     }
 
     private suspend fun stopConnection(reason: CharacterStopReason) {
+        active?.stt?.close()
         characterPresentation.pause()
         generation++
         active?.mediaCurrent?.set(false)
@@ -679,6 +867,8 @@ class ConnectionRepository(
     }
 
     override fun close() {
+        active?.stt?.close()
+        active?.input?.close()
         active?.mediaCurrent?.set(false)
         active?.extensions?.shutdown()
         active?.character?.shutdown(CharacterStopReason.CLOSED)

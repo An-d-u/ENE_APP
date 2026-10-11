@@ -57,6 +57,7 @@ internal fun ChatMessageGroup(message: PublicMessage, text: String, last: Boolea
                               actions: ChatActionsViewState, thought: ThoughtContent?,
                               expanded: Boolean, onToggleThought: () -> Unit,
                               onEdit: (String) -> Unit, onReroll: (String) -> Unit, onRetryThought: (String) -> Unit,
+                              photos: List<dev.ene.companion.input.ChatThumbnail> = emptyList(),
                               onMeasured: (BubbleGeometry) -> Unit) {
     val reporter = remember(text) { BubbleGeometryReporter() }
     reporter.onMeasured = onMeasured
@@ -92,7 +93,8 @@ internal fun ChatMessageGroup(message: PublicMessage, text: String, last: Boolea
                 }
             }
             if (last) {
-                if (message.attachment_unsupported == true) Text("첨부 내용은 PC에서 확인해 주세요.", style = MaterialTheme.typography.bodySmall)
+                if (photos.isNotEmpty()) MessagePhotos(photos)
+                else if (message.attachment_unsupported == true) Text("첨부 내용은 PC에서 확인해 주세요.", style = MaterialTheme.typography.bodySmall)
                 ChatActionNotice(message.id, message.role, actions)
                 if (!user) MessageThought(thought, expanded) { onRetryThought(message.id) }
             }

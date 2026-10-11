@@ -19,6 +19,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onPause() {
         (application as EneApplication).chatLayout.finishAdjustment()
+        (application as EneApplication).background.finish()
         (application as EneApplication).connection.activityResumed(false, isChangingConfigurations)
         super.onPause()
     }
@@ -33,7 +34,7 @@ class MainActivity : ComponentActivity() {
             MaterialTheme(colorScheme = darkColorScheme(primary = Color(0xFF91C5FF),
                 surface = Color(0xFF1B1D22), background = Color(0xFF111214))) {
                 val app = application as EneApplication
-                ConnectionScreen(app.connection, app.chatLayout)
+                ConnectionScreen(app.connection, app.chatLayout, app.background)
             }
         }
     }

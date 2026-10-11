@@ -42,6 +42,9 @@ interface CompanionSocket {
 }
 
 interface ConnectionTransport : InfoProbe, Closeable {
+    val supportsInput: Boolean get() = false
+    fun input(token: String, context: ExtensionContext, isCurrent: () -> Boolean): InputMedia =
+        throw ConnectionException("input_unsupported")
     suspend fun open(endpoint: Endpoint, expectedServerId: String, token: String?, pairing: Boolean): CompanionSocket
     val supportsAudio: Boolean get() = false
     fun audio(token: String, context: ExtensionContext, isCurrent: () -> Boolean): AudioMedia =
@@ -152,6 +155,13 @@ class OkHttpTransport(private val trust: TrustedServer) : ConnectionTransport, C
     private val sockets: MutableSet<OkHttpSocket> = ConcurrentHashMap.newKeySet()
     override val supportsAudio = true
     override val supportsCharacter = true
+    override val supportsInput = true
+
+    @Synchronized override fun input(token: String, context: ExtensionContext, isCurrent: () -> Boolean): InputMedia {
+        val tls = binding ?: throw ConnectionException("connection_closed")
+        if (closed || sockets.isEmpty() || !isCurrent()) throw ConnectionException("connection_closed")
+        return InputMediaTransport(tls, token, context, isCurrent)
+    }
 
     @Synchronized override fun audio(token: String, context: ExtensionContext, isCurrent: () -> Boolean): AudioMedia {
         val tls = binding ?: throw ConnectionException("connection_closed")

@@ -34,7 +34,18 @@ data class ConnectionViewState(
     val chatProgress: ChatProgressViewState = ChatProgressViewState(),
     val conversationScope: ConversationScope? = null,
     val conversationRevision: Long? = null,
+    val photoCount: Int = 0,
+    val photoPreparing: Boolean = false,
+    val photoSupported: Boolean = false,
+    val photoAllowed: Boolean = false,
+    val photoRetry: Boolean = false,
+    val inputNotice: String? = null,
+    val chatImages: Map<String, List<dev.ene.companion.input.ChatThumbnail>> = emptyMap(),
+    val stt: dev.ene.companion.input.SttView = dev.ene.companion.input.SttView(),
+    val sttSupported: Boolean = false,
+    val sttReview: String? = null,
 ) {
-    val canSend: Boolean get() = phase == ConnectionPhase.CONNECTED && processing.phase == "idle" && sendState == null && !chatActions.busy && draft.isNotBlank()
+    val canSend: Boolean get() = phase == ConnectionPhase.CONNECTED && processing.phase == "idle" && sendState == null && !chatActions.busy &&
+        !photoPreparing && !stt.busy && (draft.isNotBlank() || photoCount > 0) && (photoCount == 0 || photoSupported && photoAllowed)
     override fun toString(): String = "ConnectionViewState(phase=$phase)"
 }

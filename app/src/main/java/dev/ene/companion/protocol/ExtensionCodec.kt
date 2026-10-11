@@ -4,7 +4,7 @@ import kotlinx.serialization.json.*
 
 /** 구문 검사는 순수 함수이며 실제 작업·현재 모델 검사는 해당 조정기가 소유한다. */
 object ExtensionCodec {
-    val capabilities = setOf("audio_pcm_v1", "character_v1", "character_controls_v1", "chat_actions_v1", "message_thoughts_v1", "chat_display_v1", "chat_progress_v1")
+    val capabilities = setOf("audio_pcm_v1", "character_v1", "character_controls_v1", "chat_actions_v1", "message_thoughts_v1", "chat_display_v1", "chat_progress_v1", "chat_images_v1", "stt_input_v1")
     private val progressTypes = setOf("chat_progress_request", "chat_progress_state")
     private val displayTypes = setOf("chat_display_request", "chat_display_state")
     private val thoughtTypes = setOf("thought_request", "thought_response", "thought_invalidated")
@@ -15,9 +15,9 @@ object ExtensionCodec {
         "audio_started", "audio_source_end", "audio_progress", "audio_progress_ack", "audio_finished", "audio_cancel")
     private val characterTypes = setOf("character_changed", "character_snapshot_request", "character_action", "character_playback")
     private val controlTypes = setOf("head_pat", "head_pat_state", "character_settings_patch", "character_settings_result")
-    val types = audioTypes + characterTypes + controlTypes + chatTypes + thoughtTypes + displayTypes + progressTypes + setOf("extensions_ready", "extension_error")
+    val types = audioTypes + characterTypes + controlTypes + chatTypes + thoughtTypes + displayTypes + progressTypes + InputCodec.types + setOf("extensions_ready", "extension_error")
     private val fromPhone = setOf("audio_availability", "audio_prepared", "audio_rejected", "audio_started", "audio_progress",
-        "audio_finished", "audio_cancel", "character_snapshot_request", "head_pat", "character_settings_patch", "chat_actions_request", "chat_action", "thought_request", "chat_display_request", "chat_progress_request")
+        "audio_finished", "audio_cancel", "character_snapshot_request", "head_pat", "character_settings_patch", "chat_actions_request", "chat_action", "thought_request", "chat_display_request", "chat_progress_request") + InputCodec.fromPhone
     private val fromPc = types - fromPhone + "audio_cancel"
     private val smallTypes = setOf("audio_progress", "audio_progress_ack", "character_playback", "head_pat", "head_pat_state", "chat_actions_request", "chat_actions_state", "thought_request", "thought_invalidated") + displayTypes + progressTypes
     private val boolSettings = setOf("enable_builtin_idle_motion", "enable_auto_eye_blink", "enable_idle_motion",
@@ -90,6 +90,7 @@ object ExtensionCodec {
         if (kind in setOf("audio_rejected", "audio_cancel", "audio_status", "audio_availability", "character_changed",
                 "head_pat_state", "character_settings_result")) put("reason", code(body["reason"]))
         when (kind) {
+            in InputCodec.types -> InputCodec.normalize(kind, body).forEach { (key, value) -> put(key, value) }
             "extensions_ready" -> {
                 val offered = body["capabilities"] as? JsonArray ?: throw ProtocolException()
                 if (offered.size !in 1..capabilities.size) throw ProtocolException()
@@ -249,6 +250,7 @@ object ExtensionCodec {
         }
         val negotiated = negotiate(negotiatedCapabilities, capabilities)
         val feature = when (kind) {
+            in InputCodec.types -> InputCodec.feature(kind, body)
             in progressTypes -> "chat_progress_v1"
             in displayTypes -> "chat_display_v1"
             in thoughtTypes -> "message_thoughts_v1"

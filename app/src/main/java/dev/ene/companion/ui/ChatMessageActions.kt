@@ -99,7 +99,7 @@ fun ChatHistory(state: ConnectionViewState, modifier: Modifier = Modifier, onEdi
     }
     val scroller = rememberChatHistoryScroller(listState, measurements)
     val density = LocalDensity.current
-    val layoutKey = listOf(state.chatActions, state.thoughts, expandedThoughts.toMap(), density.density, density.fontScale)
+    val layoutKey = listOf(state.chatActions, state.thoughts, state.chatImages, expandedThoughts.toMap(), density.density, density.fontScale)
     SideEffect { scroller.update(state, groups, split, progress, layoutKey) }
     val visibleCallback by rememberUpdatedState(onVisibleThoughts)
     LaunchedEffect(listState) {
@@ -126,7 +126,7 @@ fun ChatHistory(state: ConnectionViewState, modifier: Modifier = Modifier, onEdi
                     expansion != null && expandedThoughts[message.id] == expansion, {
                         if (expandedThoughts[message.id] == expansion) expandedThoughts.remove(message.id)
                         else if (expansion != null) expandedThoughts[message.id] = expansion
-                    }, onEdit, onReroll, onRetryThought) { measurements[key] = MeasuredBubble(parts.starts[index], it) }
+                    }, onEdit, onReroll, onRetryThought, state.chatImages[message.id].orEmpty()) { measurements[key] = MeasuredBubble(parts.starts[index], it) }
             }
         }
         if (progress != null) item(key = "chat-action-progress") {

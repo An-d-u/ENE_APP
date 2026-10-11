@@ -24,12 +24,17 @@ class EneApplication : Application(), DefaultLifecycleObserver {
         private set
     lateinit var chatLayout: ChatLayoutController
         private set
+    lateinit var background: dev.ene.companion.input.BackgroundController
+        private set
 
     override fun onCreate() {
         super<Application>.onCreate()
         val startedMillis = System.currentTimeMillis()
         chatLayout = ChatLayoutController(ChatLayoutStore(this), applicationScope)
+        background = dev.ene.companion.input.BackgroundController(dev.ene.companion.input.AndroidBackgroundStorage(this), applicationScope)
         connection = ConnectionRepository(TokenStore(this), ConnectionSettingsStore(this),
+            photoStorage = dev.ene.companion.input.AndroidPhotoStorage(this),
+            recordingPlatform = dev.ene.companion.input.AndroidRecordingPlatform(this),
             discovery = androidPcDiscovery(this),
             audioPlatform = AndroidAudioPlatform(this), characterPlatform = CharacterPlatform.android(this),
             placementController = CharacterPlacementController(CharacterPlacementStore(this), applicationScope))
@@ -40,5 +45,5 @@ class EneApplication : Application(), DefaultLifecycleObserver {
         }
     }
     override fun onStart(owner: LifecycleOwner) { connection.foreground(true) }
-    override fun onStop(owner: LifecycleOwner) { chatLayout.finishAdjustment(); connection.foreground(false) }
+    override fun onStop(owner: LifecycleOwner) { chatLayout.finishAdjustment(); background.finish(); connection.foreground(false) }
 }

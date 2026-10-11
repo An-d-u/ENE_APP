@@ -23,7 +23,8 @@ import kotlin.math.roundToInt
 
 /** 대화와 초안은 메모리에만 둔다. 화면 설정만 별도 로컬 파일에 저장한다. */
 @Composable
-fun ConnectionScreen(repository: ConnectionRepository, layoutController: ChatLayoutController) {
+fun ConnectionScreen(repository: ConnectionRepository, layoutController: ChatLayoutController,
+                     backgroundController: dev.ene.companion.input.BackgroundController? = null) {
     val state by repository.state.collectAsStateWithLifecycle()
     val character by repository.characterState.collectAsStateWithLifecycle()
     val placement by repository.characterPlacement.collectAsStateWithLifecycle()
@@ -43,6 +44,7 @@ fun ConnectionScreen(repository: ConnectionRepository, layoutController: ChatLay
         OverlayChatLayout(layout, layoutController::change, layoutController::finishAdjustment,
             modifier = Modifier.semantics { if (camera) hideFromAccessibility() },
             scene = { CharacterScene(repository, state.phase == ConnectionPhase.CONNECTED && !camera) },
+            background = { backgroundController?.let { controller -> val background by controller.state.collectAsStateWithLifecycle(); PhoneBackground(background) } },
             toolbar = {
                 CompanionToolbar(connectionHeading(state), state.registered,
                     state.phase == ConnectionPhase.CONNECTED && character.settings.available && !character.settings.busy,
@@ -100,8 +102,11 @@ fun ConnectionScreen(repository: ConnectionRepository, layoutController: ChatLay
                 }
             }
             HorizontalDivider(color = Color.White.copy(alpha = .08f))
+            PhotoDraftPanel(repository, state, compact)
+            SttPanel(repository, state)
             Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                InputMenu(repository, state)
                 OutlinedTextField(state.draft, onValueChange = repository::editDraft,
                     placeholder = { Text("메시지 보내기") }, modifier = Modifier.weight(1f).semantics {
                         contentDescription = "메시지 · 입력 내용은 앱 종료 시 삭제됩니다"
@@ -128,6 +133,7 @@ fun ConnectionScreen(repository: ConnectionRepository, layoutController: ChatLay
         MessageEditDialog(editor, repository::editMessageDraft, { repository.submitMessageEdit() }, repository::cancelMessageEditor)
     }
     when (dialog) {
+        "background" -> backgroundController?.let { BackgroundDialog(it) { dialog = null } }
         "status" -> AlertDialog(onDismissRequest = { dialog = null }, title = { Text("연결 및 재생 상태") }, text = {
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 ConnectionStatus(state)

@@ -26,10 +26,12 @@ internal val ChatAssistantColor = Color.White.copy(alpha = .96f)
 @Composable
 internal fun OverlayChatLayout(state: ChatLayoutState, onHeight: (Float) -> Unit, onFinish: () -> Unit,
                                scene: @Composable () -> Unit, toolbar: @Composable () -> Unit,
+                               background: @Composable () -> Unit = {},
                                modifier: Modifier = Modifier, content: @Composable ColumnScope.(Boolean) -> Unit) {
     val density = LocalDensity.current
     val keyboard = WindowInsets.ime.getBottom(density) > 0
     Box(modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color(0xFF152331), Color(0xFF304858), Color(0xFF18212C))))) {
+        Box(Modifier.matchParentSize()) { background() }
         Box(Modifier.matchParentSize()) { scene() }
         BoxWithConstraints(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal))
             .imePadding().navigationBarsPadding()) {
@@ -110,6 +112,7 @@ internal fun CompanionToolbar(status: String, registered: Boolean, commonSetting
                     DropdownMenuItem(text = { Text("연결 진단") }, onClick = { select("diagnostics") })
                     HorizontalDivider()
                     DropdownMenuItem(text = { Text("휴대폰 배치") }, onClick = { expanded = false; onPlacement() })
+                    DropdownMenuItem(text = { Text("배경 및 효과") }, onClick = { select("background") })
                     DropdownMenuItem(text = { Text("캐릭터 공통 설정") }, enabled = commonSettingsEnabled, onClick = { select("character") })
                     HorizontalDivider()
                     DropdownMenuItem(text = { Text("등록 해제", color = MaterialTheme.colorScheme.error) }, enabled = registered, onClick = { select("forget") })
