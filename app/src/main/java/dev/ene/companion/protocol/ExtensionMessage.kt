@@ -14,6 +14,25 @@ sealed class ExtensionMessage : WireMessage() {
 
 data class ExtensionContext(val registrationGeneration: Long, val serverEpoch: String, val connectionGeneration: String, val conversationId: String)
 
+@Serializable @SerialName("chat_progress_request")
+data class ChatProgressRequest(
+    override val registration_generation: Long,
+    override val server_epoch: String,
+    override val connection_generation: String,
+    val conversation_id: String,
+) : ExtensionMessage()
+
+@Serializable @SerialName("chat_progress_state")
+data class ChatProgress(
+    override val registration_generation: Long,
+    override val server_epoch: String,
+    override val connection_generation: String,
+    val conversation_id: String,
+    val progress_revision: Long,
+    val phase: String,
+    val request_id: String? = null,
+) : ExtensionMessage()
+
 @Serializable @SerialName("chat_actions_request")
 data class ChatActionsRequest(
     override val registration_generation: Long,
