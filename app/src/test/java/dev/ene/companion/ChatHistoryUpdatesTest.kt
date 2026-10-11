@@ -139,4 +139,18 @@ class ChatHistoryUpdatesTest {
         state.completedSnapshot(scope, 1, listOf(question))
         assertEquals(version, state.renderVersion)
     }
+
+    @Test fun arrivalDuringUserMovementCannotResumeFollowingFromOldBottomMeasurement() {
+        val state = reading()
+        state.userScrollStarted()
+        val oldBottom = state.layout(bottom = true)
+        state.completedSnapshot(scope, 2, listOf(question, answer.copy(text = "바뀐 예시 답변")))
+        state.userScrollFinished(oldBottom)
+        assertTrue(state.userScrolling)
+        assertFalse(state.following)
+        state.userScrollFinished(state.layout(bottom = false))
+        assertFalse(state.userScrolling)
+        assertFalse(state.following)
+        assertTrue(state.hasUnseen)
+    }
 }

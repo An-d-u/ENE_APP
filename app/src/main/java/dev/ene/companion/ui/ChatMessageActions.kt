@@ -8,7 +8,9 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.liveRegion
@@ -18,9 +20,6 @@ import dev.ene.companion.connection.*
 import dev.ene.companion.presentation.*
 import dev.ene.companion.protocol.PublicMessage
 import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.flow.filterNotNull
-import kotlinx.coroutines.flow.first
-import kotlin.math.roundToInt
 
 internal fun chatActionCompatibilityNotice(state: ConnectionViewState): String? =
     if (state.phase == ConnectionPhase.CONNECTED && !state.chatActions.supported)
@@ -72,31 +71,24 @@ private data class ExpandedThought(val message: PublicMessage, val content: Thou
     override fun toString() = "ExpandedThought"
 }
 
-private data class ChatScrollAnchor(val atEnd: Boolean, val messageId: String?, val sourceOffset: Int, val lineOffset: Float)
-private class MessageChunks(val text: String, val split: Boolean) {
-    val chunks = splitMessageBubbles(text, split).ifEmpty { listOf("") }
-    val starts = messageBubbleOffsets(text, chunks)
-}
-private data class MeasuredBubble(val start: Int, val geometry: BubbleGeometry)
-
 /** 동일 ID의 답변 교체에서도 기존 스크롤 위치와 마지막 진행 항목을 유지한다. */
 @Composable
 fun ChatHistory(state: ConnectionViewState, modifier: Modifier = Modifier, onEdit: (String) -> Unit, onReroll: (String) -> Unit,
                 onVisibleThoughts: (List<String>) -> Unit = {}, onRetryThought: (String) -> Unit = {},
                 listState: LazyListState = rememberLazyListState(),
                 footer: @Composable () -> Unit = {}) {
-    val nearEnd by remember { derivedStateOf { !listState.canScrollForward } }
     val progress = chatActionProgress(state)
     val split = state.chatDisplay.splitEnabled
     // 분할 결과는 현재 대화에만 보관하고, 변경되지 않은 원문은 재사용한다.
     val chunkCache = remember { mutableMapOf<String, MessageChunks>() }
     val measurements = remember { mutableStateMapOf<Pair<String, Boolean>, MeasuredBubble>() }
-    val groups = state.messages.map { message ->
-        val cached = chunkCache[message.id]
-        message to (cached?.takeIf { it.text == message.text && it.split == split }
-            ?: MessageChunks(message.text, split).also { chunkCache[message.id] = it })
+    val groups = remember(state.messages, split) {
+        state.messages.map { message ->
+            val cached = chunkCache[message.id]
+            message to (cached?.takeIf { it.text == message.text && it.split == split }
+                ?: MessageChunks(message.text, split).also { chunkCache[message.id] = it })
+        }.also { chunkCache.keys.retainAll(state.messages.map { it.id }.toSet()) }
     }
-    SideEffect { chunkCache.keys.retainAll(state.messages.map { it.id }.toSet()) }
     val expandedThoughts = remember { mutableStateMapOf<String, ExpandedThought>() }
     LaunchedEffect(state.messages, state.thoughts) {
         val messages = state.messages.associateBy { it.id }
@@ -105,62 +97,22 @@ fun ChatHistory(state: ConnectionViewState, modifier: Modifier = Modifier, onEdi
             if (saved?.message != messages[id] || saved?.content != state.thoughts[id]) expandedThoughts.remove(id)
         }
     }
-    var pendingAnchor by remember { mutableStateOf<ChatScrollAnchor?>(null) }
-    val splitAnchor = remember(split) {
-        val first = listState.layoutInfo.visibleItemsInfo.firstOrNull { originalMessageId(it.key as? String ?: "") != null }
-        val measured = first?.let { measurements[it.key as String to !split] }
-        val geometry = measured?.geometry
-        val y = if (first != null && geometry != null) (-first.offset - geometry.textTop).coerceAtLeast(0f) else 0f
-        val line = geometry?.layout?.getLineForVerticalPosition(y) ?: 0
-        ChatScrollAnchor(!listState.canScrollForward, first?.let { originalMessageId(it.key as String) },
-            (measured?.start ?: 0) + (geometry?.layout?.getLineStart(line) ?: 0),
-            y - (geometry?.layout?.getLineTop(line) ?: 0f))
-    }
-    var previousSplit by remember { mutableStateOf(split) }
-    val rowCount = groups.sumOf { it.second.chunks.size }
+    val scroller = rememberChatHistoryScroller(listState, measurements)
+    val density = LocalDensity.current
+    val layoutKey = listOf(state.chatActions, state.thoughts, expandedThoughts.toMap(), density.density, density.fontScale)
+    SideEffect { scroller.update(state, groups, split, progress, layoutKey) }
     val visibleCallback by rememberUpdatedState(onVisibleThoughts)
     LaunchedEffect(listState) {
         snapshotFlow { listState.layoutInfo.visibleItemsInfo.mapNotNull { originalMessageId(it.key as? String ?: "") }.distinct() }
             .distinctUntilChanged().collect { visibleCallback(it) }
     }
     DisposableEffect(Unit) { onDispose { visibleCallback(emptyList()) } }
-    // 복원이 끝나기 전에 새 답변이나 다음 분할 변경이 오더라도 원래 앵커를 버리지 않는다.
-    LaunchedEffect(split, state.messages) {
-        if (previousSplit == split && pendingAnchor == null) return@LaunchedEffect
-        val anchor = pendingAnchor ?: splitAnchor
-        pendingAnchor = anchor
-        if (state.messages.isNotEmpty() && !anchor.atEnd) {
-            var index = 0
-            for ((message, parts) in groups) {
-                if (message.id == anchor.messageId) {
-                    val chunk = messageBubbleAtOffset(parts.starts, anchor.sourceOffset)
-                    index += chunk
-                    val key = messageBubbleKey(message.id, chunk, chunk == parts.chunks.lastIndex) to split
-                    listState.scrollToItem(index)
-                    val measured = snapshotFlow { measurements[key]?.takeIf {
-                        it.geometry.layout.layoutInput.text.text == parts.chunks[chunk]
-                    } }.filterNotNull().first()
-                    val geometry = measured.geometry
-                    val line = geometry.layout.getLineForOffset((anchor.sourceOffset - measured.start).coerceIn(0, parts.chunks[chunk].length))
-                    listState.scrollToItem(index, (geometry.textTop + geometry.layout.getLineTop(line) + anchor.lineOffset).roundToInt())
-                    break
-                }
-                index += parts.chunks.size
-            }
-        } else if (state.messages.isNotEmpty()) {
-            listState.scrollToItem(rowCount + if (progress != null) 1 else 0)
-        }
-        previousSplit = split
-        pendingAnchor = null
-    }
-    LaunchedEffect(state.messages.lastOrNull()?.id, state.chatActions.busy, progress) {
-        if (previousSplit == split && pendingAnchor == null && state.messages.isNotEmpty() && nearEnd) {
-            listState.scrollToItem(rowCount + if (progress != null) 1 else 0)
-        }
-    }
-    LazyColumn(modifier.fillMaxWidth().testTag("chat-history"), state = listState,
+    Box(modifier.fillMaxWidth()) {
+    // 안내 영역은 목록 밖에 확보해 본문이나 수정·리롤 버튼을 덮지 않는다.
+    LazyColumn(Modifier.fillMaxSize().padding(bottom = if (scroller.hasUnseen) 64.dp else 0.dp)
+        .chatHistoryInput(scroller).testTag("chat-history"), state = listState,
         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)) {
-        if (state.messages.isEmpty()) item {
+        if (state.messages.isEmpty()) item(key = "chat-empty") {
             Text(if (state.phase == ConnectionPhase.CONNECTED) "아직 표시할 대화가 없습니다." else "PC ENE를 실행하고 같은 Wi-Fi에서 연결해 주세요.", style = MaterialTheme.typography.bodyMedium)
         }
         groups.forEach { (message, parts) ->
@@ -181,6 +133,14 @@ fun ChatHistory(state: ConnectionViewState, modifier: Modifier = Modifier, onEdi
             Text(progress, Modifier.semantics { liveRegion = LiveRegionMode.Polite }, style = MaterialTheme.typography.bodyMedium)
         }
         item(key = "chat-notices") { footer() }
+    }
+    if (scroller.hasUnseen) {
+        FilledTonalButton(onClick = scroller::jump,
+            modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 8.dp).heightIn(min = 48.dp)
+                .testTag("chat-new-messages").semantics { liveRegion = LiveRegionMode.Polite }) {
+            Text("새 메시지 ↓")
+        }
+    }
     }
 }
 
