@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   unit-tests:
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
     timeout-minutes: 30
     steps:
       - name: Check out source
@@ -22,6 +22,8 @@ jobs:
           distribution: temurin
           java-version: '21'
       - name: Install Android SDK packages
-        run: '"$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-36" "build-tools;35.0.0"'
+        shell: cmd
+        run: call "%ANDROID_HOME%\cmdline-tools\latest\bin\sdkmanager.bat" "platforms;android-36" "build-tools;35.0.0"
       - name: Run JVM unit tests
-        run: sh ./gradlew :app:testDebugUnitTest --dependency-verification strict --console=plain
+        shell: cmd
+        run: call gradlew.bat :app:testDebugUnitTest --dependency-verification strict --console=plain
