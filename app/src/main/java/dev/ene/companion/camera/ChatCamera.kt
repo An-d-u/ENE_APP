@@ -18,6 +18,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.LiveData
 import androidx.lifecycle.Observer
+import dev.ene.companion.connection.ObservationIntervals
 import java.util.concurrent.Executors
 
 /** 한 번 허용한 렌즈만 연다. 종료 후 도착하는 프레임과 미리보기 콜백은 폐기한다. */
@@ -29,6 +30,7 @@ internal class ChatCamera(
     private val rotation: Int,
     private val current: () -> Boolean,
     private val observationEpoch: () -> Long?,
+    intervals: () -> ObservationIntervals,
     private val onObservation: (Long, ByteArray) -> Unit,
     private val onFailure: () -> Unit,
 ) {
@@ -37,7 +39,7 @@ internal class ChatCamera(
         "back" -> CameraSelector.DEFAULT_BACK_CAMERA
         else -> error("지원하지 않는 렌즈")
     }
-    private val sampler = CameraFrameSampler()
+    private val sampler = CameraFrameSampler(intervals)
     private val worker = Executors.newSingleThreadExecutor()
     private val main = ContextCompat.getMainExecutor(context)
     private val analysis = ImageAnalysis.Builder().setTargetRotation(rotation)

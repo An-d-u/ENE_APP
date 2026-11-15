@@ -138,6 +138,12 @@ fun ConnectionScreen(repository: ConnectionRepository, layoutController: ChatLay
         MessageEditDialog(editor, repository::editMessageDraft, { repository.submitMessageEdit() }, repository::cancelMessageEditor)
     }
     when (dialog) {
+        "observation-intervals" -> {
+            val timings by repository.observationIntervals.collectAsStateWithLifecycle()
+            ObservationIntervalDialog(timings, state.phase == ConnectionPhase.CONNECTED,
+                { sample, request -> repository.setObservationIntervals(sample, request) },
+                { repository.refreshObservationIntervals() }, { dialog = null })
+        }
         "background" -> backgroundController?.let { BackgroundDialog(it) { dialog = null } }
         "status" -> AlertDialog(onDismissRequest = { dialog = null }, title = { Text("연결 및 재생 상태") }, text = {
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {

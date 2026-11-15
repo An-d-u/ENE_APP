@@ -4,7 +4,8 @@ import kotlinx.serialization.json.*
 
 /** 구문 검사는 순수 함수이며 실제 작업·현재 모델 검사는 해당 조정기가 소유한다. */
 object ExtensionCodec {
-    val capabilities = setOf("audio_pcm_v1", "character_v1", "character_controls_v1", "chat_actions_v1", "message_thoughts_v1", "chat_display_v1", "chat_progress_v1", "chat_images_v1", "stt_input_v1", "camera_v1")
+    val capabilities = setOf("audio_pcm_v1", "character_v1", "character_controls_v1", "chat_actions_v1", "message_thoughts_v1", "chat_display_v1", "chat_progress_v1", "chat_images_v1", "stt_input_v1", "camera_v1", "observation_intervals_v1")
+    private val intervalTypes = setOf("observation_intervals_get", "observation_intervals_set", "observation_intervals_state")
     private val progressTypes = setOf("chat_progress_request", "chat_progress_state")
     private val displayTypes = setOf("chat_display_request", "chat_display_state")
     private val thoughtTypes = setOf("thought_request", "thought_response", "thought_invalidated")
@@ -15,9 +16,10 @@ object ExtensionCodec {
         "audio_started", "audio_source_end", "audio_progress", "audio_progress_ack", "audio_finished", "audio_cancel")
     private val characterTypes = setOf("character_changed", "character_snapshot_request", "character_action", "character_playback")
     private val controlTypes = setOf("head_pat", "head_pat_state", "character_settings_patch", "character_settings_result")
-    val types = audioTypes + characterTypes + controlTypes + chatTypes + thoughtTypes + displayTypes + progressTypes + InputCodec.types + setOf("extensions_ready", "extension_error")
+    val types = audioTypes + characterTypes + controlTypes + chatTypes + thoughtTypes + displayTypes + progressTypes + intervalTypes + InputCodec.types + setOf("extensions_ready", "extension_error")
     private val fromPhone = setOf("audio_availability", "audio_prepared", "audio_rejected", "audio_started", "audio_progress",
-        "audio_finished", "audio_cancel", "character_snapshot_request", "head_pat", "character_settings_patch", "chat_actions_request", "chat_action", "thought_request", "chat_display_request", "chat_progress_request") + InputCodec.fromPhone
+        "audio_finished", "audio_cancel", "character_snapshot_request", "head_pat", "character_settings_patch", "chat_actions_request", "chat_action", "thought_request", "chat_display_request", "chat_progress_request",
+        "observation_intervals_get", "observation_intervals_set") + InputCodec.fromPhone
     private val fromPc = types - fromPhone + "audio_cancel"
     private val smallTypes = setOf("audio_progress", "audio_progress_ack", "character_playback", "head_pat", "head_pat_state", "chat_actions_request", "chat_actions_state", "thought_request", "thought_invalidated") + displayTypes + progressTypes
     private val boolSettings = setOf("enable_builtin_idle_motion", "enable_auto_eye_blink", "enable_idle_motion",
@@ -29,7 +31,7 @@ object ExtensionCodec {
         "head_pat_end_emotion_duration_sec" to (1L to 30L))
     private val expressionSettings = setOf("head_pat_active_emotion_custom", "head_pat_end_emotion_custom")
 
-    fun wireLimit(kind: String): Int = if (kind in smallTypes) 2048 else if (kind == "character_settings_patch") 49152 else 65536
+    fun wireLimit(kind: String): Int = if (kind in smallTypes || kind in intervalTypes) 2048 else if (kind == "character_settings_patch") 49152 else 65536
 
     fun negotiate(offered: Set<String>, supported: Set<String> = emptySet()): Set<String> {
         val common = (offered intersect supported intersect capabilities).toMutableSet()
@@ -97,6 +99,17 @@ object ExtensionCodec {
                 val values = offered.map { choice(it, capabilities) }
                 if (values.distinct().size != values.size || negotiate(values.toSet(), capabilities) != values.toSet()) throw ProtocolException()
                 put("capabilities", JsonArray(values.map(::JsonPrimitive)))
+            }
+            in intervalTypes -> {
+                put("conversation_id", ProtocolCodec.uuid(body["conversation_id"]))
+                if (kind != "observation_intervals_state" || "query_id" in body) put("query_id", ProtocolCodec.uuid(body["query_id"]))
+                if (kind != "observation_intervals_get") {
+                    for (key in listOf("sample_seconds", "request_seconds")) put(key, ProtocolCodec.integer(body[key], 1, 86_400))
+                }
+                if (kind == "observation_intervals_state") {
+                    put("revision", ProtocolCodec.integer(body["revision"], 1))
+                    put("saved", bool(body["saved"]))
+                }
             }
             in progressTypes -> {
                 put("conversation_id", ProtocolCodec.uuid(body["conversation_id"]))
@@ -251,6 +264,7 @@ object ExtensionCodec {
         val negotiated = negotiate(negotiatedCapabilities, capabilities)
         val feature = when (kind) {
             in InputCodec.types -> InputCodec.feature(kind, body)
+            in intervalTypes -> "observation_intervals_v1"
             in progressTypes -> "chat_progress_v1"
             in displayTypes -> "chat_display_v1"
             in thoughtTypes -> "message_thoughts_v1"

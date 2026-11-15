@@ -79,7 +79,10 @@ internal fun ChatCameraControl(repository: ConnectionRepository, state: CameraSh
         val epoch = state.generation
         fun current() = repository.cameraShare.value.let { it.generation == epoch && it.available && (it.question || it.observe) }
         val camera = ChatCamera(context, owner, epoch, state.lens, rotation, ::current,
-            { repository.cameraShare.value.takeIf { it.generation == epoch && it.observe && it.observeAllowed }?.observeEpoch },
+            { val timing = repository.observationIntervals.value
+                repository.cameraShare.value.takeIf { it.generation == epoch && it.observe && it.observeAllowed &&
+                    (!timing.supported || timing.loaded) }?.observeEpoch },
+            { repository.observationIntervals.value.intervals },
             { ownership, jpeg -> repository.submitCameraObservation(epoch, ownership, jpeg) },
             { if (current()) {
                 error = "선택한 카메라를 열 수 없어 공유를 종료했습니다."

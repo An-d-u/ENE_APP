@@ -76,6 +76,15 @@ class ConnectionRepository(
         var inputPhase: String? = null
         var stt: SttSession? = null
     }
+    private val sharedIntervals = SharedObservationIntervals(nowMillis)
+    val observationIntervals = sharedIntervals.state
+    fun refreshObservationIntervals() = command {
+        if (mutableState.value.phase == ConnectionPhase.CONNECTED) sharedIntervals.refresh()
+    }
+    fun setObservationIntervals(sampleSeconds: Int, requestSeconds: Int) = command {
+        if (mutableState.value.phase == ConnectionPhase.CONNECTED) sharedIntervals.save(sampleSeconds, requestSeconds)
+    }
+
     private val camera = CameraSharing(scope)
     val cameraShare = camera.state
     fun stopCameraShare() = camera.stop()
@@ -184,6 +193,8 @@ class ConnectionRepository(
         val ready = record.inputReady ?: return
         if (!record.mediaCurrent.get() || record.session.syncing || record.pendingBaseHeaders > 0) return
         val c = ExtensionContext(ready.registration_generation, record.session.serverEpoch, ready.connection_generation, record.session.conversationId)
+        if ("observation_intervals_v1" in ready.capabilities) sharedIntervals.connect(c, record.socket::send)
+        if (ready.capabilities.none { it in setOf("chat_images_v1", "stt_input_v1", "camera_v1") }) return
         if (record.input?.context == c) {
             if (record.inputPhase != record.session.snapshot?.processing?.phase) {
                 record.inputPhase = record.session.snapshot?.processing?.phase
@@ -640,6 +651,7 @@ class ConnectionRepository(
                 add("message_thoughts_v1")
                 add("chat_display_v1")
                 add("chat_progress_v1")
+                add("observation_intervals_v1")
                 if (cameraSharingEnabled && transport.supportsInput) add("camera_v1")
                 if (photoStorage != null && transport.supportsInput) add("chat_images_v1")
                 if (recordingPlatform != null && transport.supportsInput) add("stt_input_v1")
@@ -700,6 +712,7 @@ class ConnectionRepository(
             publishDraft()
             exchangeSession(socket, nowMillis, {
                 session.checkTimeout()
+                sharedIntervals.tick()
                 pumpChatActions(record)
                 pumpThoughts(record)
                 pumpChatDisplay(record)
@@ -716,10 +729,11 @@ class ConnectionRepository(
             }, onExtension = {
                 if (it is ExtensionsReady && record.inputReady == null && it.registration_generation == ready.registration_generation &&
                     it.server_epoch == ready.server_epoch && it.capabilities.toSet() == ready.capabilities.toSet() &&
-                    it.capabilities.any { cap -> cap in setOf("chat_images_v1", "stt_input_v1", "camera_v1") }) {
+                    it.capabilities.any { cap -> cap in setOf("chat_images_v1", "stt_input_v1", "camera_v1", "observation_intervals_v1") }) {
                     record.inputReady = it
                     inputSynchronized(record, transport)
                 }
+                if (it is ObservationIntervalsState && active === record && record.mediaCurrent.get()) sharedIntervals.receive(it)
                 if (it is CameraState && active === record && record.mediaCurrent.get()) camera.receive(it)
                 record.input?.receive(it)
                 record.images?.receive(it)
@@ -760,6 +774,7 @@ class ConnectionRepository(
                         is ChatEvent -> header.server_epoch to header.conversation_id
                         else -> error("도달할 수 없는 헤더")
                     }
+                    sharedIntervals.baseChanged(epoch, conversation)
                     chatActions.baseState(epoch, conversation, false)
                     if (record.input?.context?.let { it.serverEpoch != epoch || it.conversationId != conversation } == true) {
                         camera.disconnect()
@@ -781,6 +796,7 @@ class ConnectionRepository(
                     character?.baseState(headerEpoch, headerConversation, false)
                 }
             }, onClosed = {
+                if (active === record) sharedIntervals.disconnect()
                 camera.disconnect()
                 discardTranscription()
                 record.mediaCurrent.set(false)
@@ -853,7 +869,10 @@ class ConnectionRepository(
             throw authenticatedSessionFailure(error.code)
         } finally {
             val closing = owned
-            if (closing === active) camera.disconnect()
+            if (closing === active) {
+                sharedIntervals.disconnect()
+                camera.disconnect()
+            }
             discardTranscription()
             closing?.mediaCurrent?.set(false)
             photoTransfer?.cancelAndJoin()
@@ -884,6 +903,7 @@ class ConnectionRepository(
     }
 
     private suspend fun stopConnection(reason: CharacterStopReason) {
+        sharedIntervals.disconnect()
         camera.disconnect()
         active?.stt?.close()
         characterPresentation.pause()
@@ -903,6 +923,7 @@ class ConnectionRepository(
     }
 
     override fun close() {
+        sharedIntervals.disconnect()
         camera.disconnect()
         active?.stt?.close()
         active?.input?.close()
