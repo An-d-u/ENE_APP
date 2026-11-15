@@ -39,28 +39,38 @@ class InputSession(val context: ExtensionContext, private val media: InputMedia,
             return withTimeout(5000) { response.await() }
         } finally { limits.remove(query) }
     }
-    suspend fun upload(purpose: String, bytes: ByteArray): InputReserved = uploadLock.withLock {
-        check(!closed)
+    suspend fun upload(purpose: String, bytes: ByteArray, generation: Long? = null,
+                       authorized: () -> Boolean = { true }): InputReserved = uploadLock.withLock {
+        check(!closed && authorized())
         val command = UUID.randomUUID().toString()
         val response = CompletableDeferred<InputReserved>()
         waiting[command] = response
         try {
             val c = context
             if (!send(InputReserve(c.registrationGeneration, c.serverEpoch, c.connectionGeneration, c.conversationId,
-                    command, purpose, bytes.size.toLong(), bytes.sha256()))) throw ConnectionException("connection_closed")
+                    command, purpose, bytes.size.toLong(), bytes.sha256(), generation))) throw ConnectionException("connection_closed")
             val slot = withTimeout(5000) { response.await() }
             if (closed || slot.purpose != purpose) throw ConnectionException("stale_extension")
             reserved[slot.upload_id] = command to purpose
-            media.upload(slot.upload_id, bytes)
-            slot
+            try {
+                if (!authorized()) throw ConnectionException("stale_extension")
+                media.upload(slot.upload_id, bytes)
+                if (closed || !authorized()) throw ConnectionException("stale_extension")
+                slot
+            } catch (error: Exception) {
+                cancelUpload(slot.upload_id)
+                throw error
+            }
         } finally { waiting.remove(command) }
     }
     fun consumed(ids: List<String>) { ids.forEach(reserved::remove) }
-    fun cancelUploads() {
+    fun cancelUpload(id: String) {
+        val (command, purpose) = reserved.remove(id) ?: return
         val c = context
-        reserved.toMap().forEach { (id, value) -> send(InputCancel(c.registrationGeneration, c.serverEpoch,
-            c.connectionGeneration, c.conversationId, value.first, value.second, id)) }
-        reserved.clear()
+        send(InputCancel(c.registrationGeneration, c.serverEpoch, c.connectionGeneration, c.conversationId, command, purpose, id))
+    }
+    fun cancelUploads(purpose: String) {
+        reserved.filterValues { it.second == purpose }.keys.toList().forEach(::cancelUpload)
     }
     suspend fun thumbnail(message: String, image: String, revision: Long) = media.thumbnail(message, image, revision)
     override fun close() {

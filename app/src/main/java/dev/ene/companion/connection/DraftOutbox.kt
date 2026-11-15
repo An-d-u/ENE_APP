@@ -35,6 +35,10 @@ internal class DraftOutbox {
         return message
     }
 
+    fun abandonBeforeSend(requestId: String) {
+        if (pending?.message?.request_id == requestId) pending = null
+    }
+
     fun syncRequest(credentials: DeviceCredentials, session: ConversationSession): SyncRequest {
         val current = pending ?: return SyncRequest()
         if (current.registration != registration(credentials) || !matches(current, session.serverEpoch, session.conversationId)) {

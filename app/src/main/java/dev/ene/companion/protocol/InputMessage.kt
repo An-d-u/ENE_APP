@@ -15,6 +15,7 @@ data class InputReserve(
     val purpose: String,
     val byte_length: Long,
     val sha256: String,
+    val generation: Long? = null,
 ) : ExtensionMessage()
 
 @Serializable @SerialName("input_reserved")

@@ -26,6 +26,7 @@ import kotlin.math.roundToInt
 fun ConnectionScreen(repository: ConnectionRepository, layoutController: ChatLayoutController,
                      backgroundController: dev.ene.companion.input.BackgroundController? = null) {
     val state by repository.state.collectAsStateWithLifecycle()
+    val cameraShare by repository.cameraShare.collectAsStateWithLifecycle()
     val character by repository.characterState.collectAsStateWithLifecycle()
     val placement by repository.characterPlacement.collectAsStateWithLifecycle()
     val layout by layoutController.state.collectAsStateWithLifecycle()
@@ -37,7 +38,9 @@ fun ConnectionScreen(repository: ConnectionRepository, layoutController: ChatLay
     val keyboard = LocalSoftwareKeyboardController.current
     val focus = LocalFocusManager.current
     val openPlacement: () -> Unit = { keyboard?.hide(); focus.clearFocus(); placementOpen = true }
-    val openPairing: () -> Unit = { keyboard?.hide(); focus.clearFocus(); if (state.registered) dialog = "pair" else camera = true }
+    val openPairing: () -> Unit = { keyboard?.hide(); focus.clearFocus(); if (state.registered) dialog = "pair" else {
+        repository.stopCameraShare(); camera = true
+    } }
     DisposableEffect(layoutController) { onDispose { layoutController.finishAdjustment() } }
 
     Box(Modifier.fillMaxSize()) {
@@ -106,7 +109,7 @@ fun ConnectionScreen(repository: ConnectionRepository, layoutController: ChatLay
             SttPanel(repository, state)
             Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                InputMenu(repository, state)
+                InputMenu(repository, state, cameraShare, { dialog = "camera-share" })
                 OutlinedTextField(state.draft, onValueChange = repository::editDraft,
                     placeholder = { Text("메시지 보내기") }, modifier = Modifier.weight(1f).semantics {
                         contentDescription = "메시지 · 입력 내용은 앱 종료 시 삭제됩니다"
@@ -121,6 +124,8 @@ fun ConnectionScreen(repository: ConnectionRepository, layoutController: ChatLay
             PairingCameraScreen(Modifier.safeDrawingPadding(), onQr = { camera = false; repository.pair(it) }, onClose = { camera = false })
         }
     }
+    ChatCameraControl(repository, cameraShare, state.phase == ConnectionPhase.CONNECTED && !camera,
+        open = dialog == "camera-share", onDismiss = { dialog = null })
     if (placementOpen) CharacterPlacementSheet(placement, repository::changeCharacterPlacement, repository::finishCharacterPlacement,
         repository::resetCharacterPlacement, repository::retryCharacterPlacementSave,
         { repository.finishCharacterPlacement(); layoutController.finishAdjustment(); placementOpen = false }) {
@@ -151,7 +156,7 @@ fun ConnectionScreen(repository: ConnectionRepository, layoutController: ChatLay
         "diagnostics" -> ConnectionDiagnosticsDialog(state.diagnostics) { dialog = null }
         "pair" -> AlertDialog(onDismissRequest = { dialog = null }, title = { Text("새 QR로 연결할까요?") },
             text = { Text("새 연결에는 PC 승인이 필요합니다. 승인될 때까지 기존 등록은 보관됩니다.") },
-            confirmButton = { TextButton(onClick = { dialog = null; camera = true }) { Text("QR 스캔") } },
+            confirmButton = { TextButton(onClick = { repository.stopCameraShare(); dialog = null; camera = true }) { Text("QR 스캔") } },
             dismissButton = { TextButton(onClick = { dialog = null }) { Text("취소") } })
         "forget" -> AlertDialog(onDismissRequest = { dialog = null }, title = { Text("이 기기의 등록을 지울까요?") },
             text = { Text("앱의 인증 정보, 표시된 대화와 초안을 지웁니다. PC의 대화나 등록은 지우지 않습니다. 다시 연결하려면 QR과 PC 승인이 필요합니다.") },

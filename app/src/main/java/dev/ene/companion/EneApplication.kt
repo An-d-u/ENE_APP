@@ -35,6 +35,7 @@ class EneApplication : Application(), DefaultLifecycleObserver {
         connection = ConnectionRepository(TokenStore(this), ConnectionSettingsStore(this),
             photoStorage = dev.ene.companion.input.AndroidPhotoStorage(this),
             recordingPlatform = dev.ene.companion.input.AndroidRecordingPlatform(this),
+            cameraSharingEnabled = true,
             discovery = androidPcDiscovery(this),
             audioPlatform = AndroidAudioPlatform(this), characterPlatform = CharacterPlatform.android(this),
             placementController = CharacterPlacementController(CharacterPlacementStore(this), applicationScope))

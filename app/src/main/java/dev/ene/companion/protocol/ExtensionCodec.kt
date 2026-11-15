@@ -4,7 +4,7 @@ import kotlinx.serialization.json.*
 
 /** 구문 검사는 순수 함수이며 실제 작업·현재 모델 검사는 해당 조정기가 소유한다. */
 object ExtensionCodec {
-    val capabilities = setOf("audio_pcm_v1", "character_v1", "character_controls_v1", "chat_actions_v1", "message_thoughts_v1", "chat_display_v1", "chat_progress_v1", "chat_images_v1", "stt_input_v1")
+    val capabilities = setOf("audio_pcm_v1", "character_v1", "character_controls_v1", "chat_actions_v1", "message_thoughts_v1", "chat_display_v1", "chat_progress_v1", "chat_images_v1", "stt_input_v1", "camera_v1")
     private val progressTypes = setOf("chat_progress_request", "chat_progress_state")
     private val displayTypes = setOf("chat_display_request", "chat_display_state")
     private val thoughtTypes = setOf("thought_request", "thought_response", "thought_invalidated")

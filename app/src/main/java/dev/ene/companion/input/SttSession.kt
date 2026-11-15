@@ -83,7 +83,7 @@ class SttSession(private val input: InputSession, private val recorder: Recordin
     }
     fun cancel(reason: String = "recording_cancelled") {
         val id = command ?: return
-        command = null; recorder.cancel(); job?.cancel(); ready?.cancel(); input.cancelUploads()
+        command = null; recorder.cancel(); job?.cancel(); ready?.cancel(); input.cancelUploads("pcm")
         val c = input.context
         send(SttCancel(c.registrationGeneration, c.serverEpoch, c.connectionGeneration, c.conversationId, id))
         show("idle", reason)

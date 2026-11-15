@@ -47,7 +47,8 @@ internal fun PhotoPreview(bytes: ByteArray, description: String, modifier: Modif
 internal fun PhotoDraftPanel(repository: ConnectionRepository, state: ConnectionViewState, compact: Boolean = false) {
     val photos by repository.photos.collectAsState()
     var expanded by remember { mutableStateOf(false) }
-    if (compact && (photos.images.isNotEmpty() || photos.preparing || photos.notice != null || state.inputNotice != null || state.photoRetry)) {
+    val notice = photos.notice ?: state.inputNotice
+    if (compact && (photos.images.isNotEmpty() || photos.preparing || (notice != null && notice != "camera_unavailable") || state.photoRetry)) {
         TextButton(onClick = { expanded = true }) { Text("첨부 사진 ${photos.images.size}장 · 상태 및 편집") }
         if (expanded) AlertDialog(onDismissRequest = { expanded = false }, title = { Text("첨부 사진") },
             text = { Column { PhotoDraftPanel(repository, state) } },
@@ -66,12 +67,13 @@ internal fun PhotoDraftPanel(repository: ConnectionRepository, state: Connection
         Text("사진은 전송 시 PC와 설정된 AI 제공자에게 전달됩니다.", Modifier.padding(horizontal = 12.dp), style = MaterialTheme.typography.labelSmall)
     }
     if (photos.preparing) Text("사진 준비 중…", Modifier.padding(horizontal = 12.dp))
-    (photos.notice ?: state.inputNotice)?.let { Text(inputNotice(it), Modifier.padding(horizontal = 12.dp), style = MaterialTheme.typography.bodySmall) }
+    notice?.let { Text(inputNotice(it), Modifier.padding(horizontal = 12.dp), style = MaterialTheme.typography.bodySmall) }
     if (state.photoRetry) TextButton(onClick = { repository.retryPhotos() }) { Text("미접수 사진 다시 전송") }
 }
 
 @Composable
-internal fun InputMenu(repository: ConnectionRepository, state: ConnectionViewState) {
+internal fun InputMenu(repository: ConnectionRepository, state: ConnectionViewState,
+                       camera: dev.ene.companion.connection.CameraShareView, onCamera: () -> Unit) {
     var open by remember { mutableStateOf(false) }
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     val scope = rememberCoroutineScope()
@@ -96,8 +98,19 @@ internal fun InputMenu(repository: ConnectionRepository, state: ConnectionViewSt
         repository.selectPhotos(values.map { it.toString() })
     }
     Box {
-        TextButton(onClick = { open = true }, modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp)) { Text("＋") }
+        val sharing = camera.question || camera.observe
+        TextButton(onClick = { open = true }, modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp)) {
+            Text(when {
+                !sharing -> "＋"
+                !camera.question && !camera.observeAllowed -> "카메라 대기"
+                camera.lens == "front" -> "전면 공유 중"
+                else -> "후면 공유 중"
+            })
+        }
         DropdownMenu(open, { open = false }) {
+            DropdownMenuItem(text = { Text("카메라 공유") }, onClick = { open = false; onCamera() })
+            if (sharing) DropdownMenuItem(text = { Text("카메라 공유 종료") },
+                onClick = { open = false; repository.stopCameraShare() })
             DropdownMenuItem(text = { Text("사진 선택") }, enabled = state.photoSupported && state.sendState == null && !state.photoPreparing,
                 onClick = { open = false; picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) })
             if (!state.photoSupported) DropdownMenuItem(text = { Text("사진 전송은 PC 업데이트·연결이 필요합니다") }, enabled = false, onClick = {})
@@ -115,6 +128,7 @@ internal fun MessagePhotos(images: List<ChatThumbnail>) {
     }
 }
 internal fun inputNotice(code: String): String = when (code) {
+    "camera_unavailable" -> "카메라 이미지를 첨부하지 못해 질문만 보냈습니다."
     "image_input_unsupported" -> "PC에서 선택한 AI 모델은 사진 입력을 지원하지 않습니다."
     "busy" -> "PC의 응답 처리가 끝나면 사진을 보낼 수 있습니다."
     "photo_count_limit" -> "사진은 한 번에 최대 4장까지 첨부할 수 있습니다."

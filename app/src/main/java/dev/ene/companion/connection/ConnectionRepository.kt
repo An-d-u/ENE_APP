@@ -32,6 +32,7 @@ class ConnectionRepository(
     private val discovery: PcDiscovery = NoPcDiscovery,
     private val photoStorage: PhotoStorage? = null,
     private val recordingPlatform: RecordingPlatform? = null,
+    private val cameraSharingEnabled: Boolean = false,
 ) : Closeable {
     private val scope = CoroutineScope(SupervisorJob() + dispatcher)
     private val transition = Mutex()
@@ -75,6 +76,26 @@ class ConnectionRepository(
         var inputPhase: String? = null
         var stt: SttSession? = null
     }
+    private val camera = CameraSharing(scope)
+    val cameraShare = camera.state
+    fun stopCameraShare() = camera.stop()
+    fun configureCameraShare(question: Boolean, observe: Boolean, lens: String) {
+        if (resumedActivity && foreground && mutableState.value.phase == ConnectionPhase.CONNECTED)
+            camera.configure(question, observe, lens)
+    }
+    fun installCameraSource(generation: Long, source: (suspend () -> ByteArray?)?) = camera.install(generation, source)
+    fun submitCameraObservation(generation: Long, observeEpoch: Long, jpeg: ByteArray) {
+        val record = active ?: return
+        camera.observe(generation, observeEpoch, jpeg) {
+            cameraContextCurrent(record) && !mutableState.value.stt.busy && drafts.state == null && photoOutbox.pending == null &&
+                mutableState.value.processing.phase == "idle"
+        }
+    }
+
+    private fun cameraContextCurrent(record: Active) = active === record && foreground && resumedActivity &&
+        mutableState.value.phase == ConnectionPhase.CONNECTED && record.mediaCurrent.get() &&
+        !record.session.syncing && record.pendingBaseHeaders == 0
+
     private var active: Active? = null
     private var sttDraft: SttDraft? = null
     private var reviewInput: InputSession? = null
@@ -155,7 +176,7 @@ class ConnectionRepository(
             catch (error: Exception) {
                 photoOutbox.failedBeforeSend()
                 mutableState.value = mutableState.value.copy(inputNotice = (error as? ConnectionException)?.code ?: "photo_send_failed")
-            } finally { input.cancelUploads(); publishDraft() }
+            } finally { input.cancelUploads("image"); publishDraft() }
         }
         publishDraft()
     }
@@ -176,6 +197,7 @@ class ConnectionRepository(
         record.input = InputSession(c, transport.input(record.credentials.token, c) {
             record.mediaCurrent.get() && record.session.serverEpoch == c.serverEpoch && record.session.conversationId == c.conversationId
         }, record.socket::send)
+        if ("camera_v1" in ready.capabilities) camera.connect(requireNotNull(record.input), record.socket::send)
         if ("stt_input_v1" in ready.capabilities && recordingPlatform != null) {
             record.stt = SttSession(requireNotNull(record.input), recordingPlatform, scope, record.socket::send,
                 publish = { if (active === record) mutableState.value = mutableState.value.copy(stt = it) },
@@ -214,7 +236,7 @@ class ConnectionRepository(
 
     /** Activity의 Main 콜백에서 즉시 호출한다. 느린 저장 작업의 mutex 뒤로 미루지 않는다. */
     fun activityResumed(value: Boolean, changingConfigurations: Boolean = false) {
-        if (!value) active?.stt?.cancel()
+        if (!value) { camera.stop(); active?.stt?.cancel() }
         if (value && !resumedActivity) command { chatDisplay.refresh(); publishChatDisplay() }
         resumedActivity = value
         active?.extensions?.resumed(value, changingConfigurations)
@@ -300,12 +322,18 @@ class ConnectionRepository(
             return@command
         }
         val message = drafts.create(current.credentials, current.session)
-        current.responseDeadline = nowMillis() + 10_000
         publishDraft()
-        if (!current.socket.send(message)) {
-            show(ConnectionPhase.RECONNECTING, "connection_closed")
-            current.socket.cancel()
+        fun deliver(payload: WireMessage, missing: Boolean) {
+            if (missing) mutableState.value = mutableState.value.copy(inputNotice = "camera_unavailable")
+            current.responseDeadline = nowMillis() + 10_000
+            if (!current.socket.send(payload)) {
+                show(ConnectionPhase.RECONNECTING, "connection_closed")
+                current.socket.cancel()
+            }
         }
+        if (!camera.question(message, { cameraContextCurrent(current) }, ::deliver, {
+                drafts.abandonBeforeSend(message.request_id); publishDraft()
+            })) deliver(message, false)
     }
 
     private fun canAct(): Boolean = active?.let {
@@ -612,6 +640,7 @@ class ConnectionRepository(
                 add("message_thoughts_v1")
                 add("chat_display_v1")
                 add("chat_progress_v1")
+                if (cameraSharingEnabled && transport.supportsInput) add("camera_v1")
                 if (photoStorage != null && transport.supportsInput) add("chat_images_v1")
                 if (recordingPlatform != null && transport.supportsInput) add("stt_input_v1")
                 if (audioPlatform != null && transport.supportsAudio) add("audio_pcm_v1")
@@ -679,16 +708,19 @@ class ConnectionRepository(
                 if (!session.syncing && record.pendingBaseHeaders == 0 && photos.value.images.isNotEmpty() &&
                     mutableState.value.photoSupported && nowMillis() >= record.nextPhotoLimits) record.input?.let { queryPhotoLimits(record, it.context) }
                 val current = requireNotNull(active)
-                if (!session.syncing && (drafts.awaitingResult || chatActions.awaitingResult ||
+                if (!session.syncing && !camera.preparingQuestion && (drafts.awaitingResult || chatActions.awaitingResult ||
                         photoOutbox.pending?.let { it.sent && !it.accepted && !it.unknown } == true)) {
                     val deadline = current.responseDeadline ?: (nowMillis() + 10_000).also { current.responseDeadline = it }
                     if (nowMillis() >= deadline) throw ConnectionException("request_status_timeout")
                 } else current.responseDeadline = null
             }, onExtension = {
-                if (it is ExtensionsReady && it.capabilities.any { cap -> cap in setOf("chat_images_v1", "stt_input_v1") }) {
+                if (it is ExtensionsReady && record.inputReady == null && it.registration_generation == ready.registration_generation &&
+                    it.server_epoch == ready.server_epoch && it.capabilities.toSet() == ready.capabilities.toSet() &&
+                    it.capabilities.any { cap -> cap in setOf("chat_images_v1", "stt_input_v1", "camera_v1") }) {
                     record.inputReady = it
                     inputSynchronized(record, transport)
                 }
+                if (it is CameraState && active === record && record.mediaCurrent.get()) camera.receive(it)
                 record.input?.receive(it)
                 record.images?.receive(it)
                 record.stt?.receive(it)
@@ -730,6 +762,7 @@ class ConnectionRepository(
                     }
                     chatActions.baseState(epoch, conversation, false)
                     if (record.input?.context?.let { it.serverEpoch != epoch || it.conversationId != conversation } == true) {
+                        camera.disconnect()
                         discardTranscription()
                         record.stt?.close(); record.input?.close(); record.images?.close()
                         record.input = null; record.stt = null; record.images = null
@@ -748,6 +781,7 @@ class ConnectionRepository(
                     character?.baseState(headerEpoch, headerConversation, false)
                 }
             }, onClosed = {
+                camera.disconnect()
                 discardTranscription()
                 record.mediaCurrent.set(false)
                 photoTransfer?.cancel(); record.input?.close()
@@ -819,6 +853,7 @@ class ConnectionRepository(
             throw authenticatedSessionFailure(error.code)
         } finally {
             val closing = owned
+            if (closing === active) camera.disconnect()
             discardTranscription()
             closing?.mediaCurrent?.set(false)
             photoTransfer?.cancelAndJoin()
@@ -849,6 +884,7 @@ class ConnectionRepository(
     }
 
     private suspend fun stopConnection(reason: CharacterStopReason) {
+        camera.disconnect()
         active?.stt?.close()
         characterPresentation.pause()
         generation++
@@ -867,6 +903,7 @@ class ConnectionRepository(
     }
 
     override fun close() {
+        camera.disconnect()
         active?.stt?.close()
         active?.input?.close()
         active?.mediaCurrent?.set(false)

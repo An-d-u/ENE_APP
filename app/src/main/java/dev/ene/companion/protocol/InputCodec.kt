@@ -8,10 +8,13 @@ internal object InputCodec {
     private val images = setOf("chat_images_send", "chat_images_request", "chat_images_state",
         "chat_images_invalidated", "chat_images_limits_request", "chat_images_limits")
     private val stt = setOf("stt_limits_request", "stt_limits", "stt_begin", "stt_ready", "stt_transcribe", "stt_result", "stt_cancel")
-    val types = uploads + images + stt
+    private val camera = setOf("camera_share", "camera_state", "camera_question", "camera_observation")
+    const val CAMERA_BYTES = 1048576
+    val types = uploads + images + stt + camera
     val fromPhone = setOf("input_reserve", "input_cancel", "chat_images_send", "chat_images_request", "chat_images_limits_request",
-        "stt_limits_request", "stt_begin", "stt_transcribe", "stt_cancel")
+        "stt_limits_request", "stt_begin", "stt_transcribe", "stt_cancel", "camera_share", "camera_question", "camera_observation")
     fun feature(kind: String, body: JsonObject) = when {
+        kind in camera || body["purpose"]?.jsonPrimitive?.content == "camera" -> "camera_v1"
         kind in images -> "chat_images_v1"
         kind in stt -> "stt_input_v1"
         body["purpose"]?.jsonPrimitive?.content == "image" -> "chat_images_v1"
@@ -29,7 +32,12 @@ internal object InputCodec {
     private fun array(value: JsonElement?, minimum: Int): JsonArray = (value as? JsonArray ?: throw ProtocolException()).also {
         if (it.size !in minimum..4) throw ProtocolException()
     }
-    private fun obj(value: JsonElement) = value as? JsonObject ?: throw ProtocolException()
+    private fun bool(value: JsonElement?): Boolean {
+        val item = value as? JsonPrimitive ?: throw ProtocolException()
+        if (item.isString) throw ProtocolException()
+        return item.booleanOrNull ?: throw ProtocolException()
+    }
+    private fun obj(value: JsonElement?) = value as? JsonObject ?: throw ProtocolException()
 
     fun normalize(kind: String, body: JsonObject) = buildJsonObject {
         put("conversation_id", ProtocolCodec.uuid(body["conversation_id"]))
@@ -37,12 +45,40 @@ internal object InputCodec {
             put("command_id", ProtocolCodec.uuid(body["command_id"]))
         if (kind in setOf("chat_images_request", "chat_images_state", "chat_images_limits_request", "chat_images_limits", "stt_limits_request", "stt_limits"))
             put("query_id", ProtocolCodec.uuid(body["query_id"]))
+        if (kind in camera) put("generation", ProtocolCodec.integer(body["generation"], 1))
         when (kind) {
+            "camera_share" -> {
+                put("lens", choice(body["lens"], setOf("front", "back")))
+                put("question", bool(body["question"])); put("observe", bool(body["observe"]))
+            }
+            "camera_state" -> {
+                val available = bool(body["available"])
+                val allowed = bool(body["observe_allowed"])
+                if (allowed && !available) throw ProtocolException()
+                put("available", available); put("observe_allowed", allowed)
+                put("model", ProtocolCodec.text(body["model"], 256)); put("remote", bool(body["remote"]))
+            }
+            "camera_question", "camera_observation" -> {
+                if (kind == "camera_question") {
+                    put("request_id", ProtocolCodec.uuid(body["request_id"]))
+                    put("text", ProtocolCodec.text(body["text"], ProtocolCodec.MAX_TEXT_BYTES, nonblank = true))
+                }
+                val frame = obj(body["frame"])
+                if (frame.keys != setOf("upload_id", "sha256", "byte_length", "mime")) throw ProtocolException()
+                put("frame", buildJsonObject {
+                    put("upload_id", ProtocolCodec.uuid(frame["upload_id"]))
+                    put("sha256", digest(frame["sha256"]))
+                    put("byte_length", ProtocolCodec.integer(frame["byte_length"], 1, CAMERA_BYTES.toLong()))
+                    put("mime", choice(frame["mime"], setOf("image/jpeg")))
+                })
+            }
             in uploads -> {
-                val purpose = choice(body["purpose"], setOf("image", "pcm"))
+                val purpose = choice(body["purpose"], setOf("image", "pcm", "camera"))
                 put("purpose", purpose)
                 if (kind == "input_reserve") {
-                    val length = ProtocolCodec.integer(body["byte_length"], 1, if (purpose == "image") 4194304 else 960000)
+                    if (purpose == "camera") put("generation", ProtocolCodec.integer(body["generation"], 1))
+                    val maxBytes = when (purpose) { "image" -> 4194304L; "camera" -> CAMERA_BYTES.toLong(); else -> 960000L }
+                    val length = ProtocolCodec.integer(body["byte_length"], 1, maxBytes)
                     if (purpose == "pcm" && length % 2 != 0L) throw ProtocolException()
                     put("byte_length", length); put("sha256", digest(body["sha256"]))
                 } else put("upload_id", ProtocolCodec.uuid(body["upload_id"]))
