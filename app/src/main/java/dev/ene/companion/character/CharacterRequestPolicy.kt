@@ -24,10 +24,11 @@ class CharacterRequestPolicy(private val modelVersion: String?, assets: Map<Stri
         const val ORIGIN = "https://appassets.androidplatform.net"
         const val DOCUMENT = "$ORIGIN/character/index.html"
         private val scripts = setOf("entry.js", "runtime_character_state.js", "runtime_live2d_model.js",
-            "runtime_motion_state.js", "runtime_gesture_engine.js", "runtime_head_pat.js", "runtime_auto_blink_tracking.js",
+            "runtime_motion_state.js", "runtime_response_motion.js", "runtime_gesture_engine.js", "runtime_head_pat.js", "runtime_auto_blink_tracking.js",
             "runtime_expression.js", "runtime_lipsync.js", "runtime_live2d_parameter_core.js", "runtime_character_host.js",
             "lib/pixi.min.js", "lib/pixi-unsafe-eval.min.js", "lib/live2dcubismcore.min.js", "lib/pixi-live2d-display.min.js")
         private val files = scripts.associate { "/character/$it" to "application/javascript" } +
-            ("/character/style.css" to "text/css")
+            ("/character/style.css" to "text/css") +
+            ("/character/motions/response-accent.json" to "application/json")
     }
 }

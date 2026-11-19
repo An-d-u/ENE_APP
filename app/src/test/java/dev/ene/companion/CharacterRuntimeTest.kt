@@ -14,11 +14,13 @@ class CharacterRuntimeTest {
         val manifest = Json.parseToJsonElement(File(root, "import-manifest.json").readText()).jsonObject
         assertEquals(1, manifest.getValue("runtime_version").jsonPrimitive.int)
         val files = manifest.getValue("files").jsonArray
-        assertEquals(21, files.size)
+        assertEquals(23, files.size)
         val localOnly = manifest.getValue("local_only_files").jsonArray.map { it.jsonPrimitive.content }.toSet()
         assertEquals(setOf("lib/live2dcubismcore.min.js"), localOnly)
         val targets = mutableSetOf<String>()
         val policy = CharacterRequestPolicy(null, emptyMap())
+        assertEquals("application/json", policy.resolve("${CharacterRequestPolicy.ORIGIN}/character/motions/response-accent.json", "GET", false)?.mime)
+        assertNull(policy.resolve("${CharacterRequestPolicy.ORIGIN}/character/motions/unknown.json", "GET", false))
         for (element in files) {
             val entry = element.jsonObject
             val target = entry.getValue("target").jsonPrimitive.content

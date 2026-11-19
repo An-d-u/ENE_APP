@@ -70,6 +70,8 @@ PC에서 확정한 움직임 설정 20개는 기존 동기화 경로를 사용�
 
 ## 공통 설정의 편집 범위
 
+PC와 앱을 함께 업데이트하면 휴대폰 캐릭터도 PC의 **설정 → 동작 설정 → 응답 동작**에서 저장한 포즈 중심 설정을 따릅니다. 선택한 모델의 표정별 자동 연결·직접 지정·표정만 사용, 성격 프리셋, 고개·몸통 강도, 발화 중 최대 추가 반복이 적용됩니다. 연결 중에 PC에서 설정을 저장하거나 모델을 바꾸면 앱이 새 설정을 받습니다. 화면에 돌아왔을 때는 현재 표정을 복원하고, 다음 응답부터 감정 동작을 재생합니다.
+
 공통 설정 경계는 허용 키와 현재 모델 범위를 검증하고, 저장 결과를 받은 뒤 새 manifest로 확정한다. 전송 결과가 불명확하면 자동으로 다시 저장하지 않는다. PC의 기존 보호 정책과 맞춰 `ParamEye`, `ParamMouth`, `ParamJaw`, `ParamTongue`, `ParamBrow`, `ParamAngle`, `ParamBody`, `ParamBreath`, `ParamArm`, `ParamHand`, `ParamShoulder`, `ParamLeg`로 시작하는 값은 직접 수정하지 못한다. 장식값만 수정하며 눈깜빡임·움직임 강도는 별도 공통 설정으로 다룬다.
 
 D2 집중 검증은 `CharacterControlsTest` 8개와 `ExtensionCodecTest` 4개, 총 12개가 통과했다. 아직 모바일 설정 화면과 `character_controls_v1` 광고는 켜지 않았으며 D3/D4에 남아 있다. 아래 전체 빌드 결과는 C4 시점이다.
@@ -82,7 +84,7 @@ D3 캐릭터 계열·쓰다듬기·확장 계약 JVM 검증은 15개 클래스 7
 
 ## 실행부 출처와 빌드 고정
 
-PC의 `tools/export_companion_character.py`는 명시 목록 21개 중 Core를 제외한 소스·라이브러리·고지 20개와 manifest만 `app/src/main/assets/character`로 복사한다. Core는 사용자가 공식 SDK를 직접 받아 설치한다. 정상적인 기존 로컬 Core는 내보내기가 덮어쓰지 않는다. 함께 보관한 `import-manifest.json`으로 독립 앱 checkout에서도 목록과 SHA-256을 검사한다. Core 없이 JVM 소스 검사는 가능하지만 APK/AAB 빌드는 Core 설치와 해시 검증이 필수다. 앱 쪽 소스 복사본은 PC 원본 변경 후 내보낸다. 모델·일반 설정·대화 파일은 내보내지 않는다.
+PC의 `tools/export_companion_character.py`는 명시 목록 23개 중 Core를 제외한 재생 코드·모션 데이터·라이브러리·고지 22개와 manifest를 `app/src/main/assets/character`로 복사한다. Core는 사용자가 공식 SDK를 직접 받아 설치한다. 정상적인 기존 로컬 Core는 내보내기가 덮어쓰지 않는다. 함께 보관한 `import-manifest.json`으로 독립 앱 checkout에서도 목록과 SHA-256을 검사한다. Core 없이 JVM 소스 검사는 가능하지만 APK/AAB 빌드는 Core 설치와 해시 검증이 필수다. 앱 쪽 소스 복사본은 PC 원본 변경 후 내보낸다. 모델·일반 설정·대화 파일은 내보내지 않는다.
 
 Pixi 7.3.0, pixi-live2d-display 0.4.0-cubism4, 고정 Cubism Core의 출처·원문 고지는 가져오기 manifest와 `notices/`에 있다. 기존 PC 조합을 유지했으며 실제 기기의 WebGL 호환성과 공개 배포 권리 검토는 별도 확인 사항이다. SDK/모델 재배포가 자동 승인됐다는 의미가 아니다.
 

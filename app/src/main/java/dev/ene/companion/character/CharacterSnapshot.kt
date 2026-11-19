@@ -80,6 +80,10 @@ class CharacterSnapshot private constructor(
             val actionSeq = ProtocolCodec.integer(body["action_seq"])
             val settings = ExtensionCodec.normalizeSettings(body["settings"])
             val expressions = ids(body["expression_ids"])
+            val responseMotion = body["response_motion"]?.let {
+                if (status != "ready") throw CharacterException("invalid_manifest")
+                ExtensionCodec.normalizeResponseMotion(it, expressions)
+            }
             val gestures = ids(body["gesture_ids"])
             val base = id(body["default_expression"])
             val patDefaults = body["head_pat_defaults"]?.let(::obj) ?: buildJsonObject {
@@ -135,6 +139,7 @@ class CharacterSnapshot private constructor(
                 put("runtime_version", runtime); put("state_revision", revision); put("settings_revision", settingsRevision); put("action_seq", actionSeq)
                 put("settings", settings); put("parameters", buildJsonObject { parameters.forEach { (key, value) -> put(key, value) } })
                 put("head_pat_defaults", patDefaults)
+                if (responseMotion != null) put("response_motion", responseMotion)
                 put("parameter_catalog", buildJsonArray { catalog.forEach { item -> add(buildJsonObject {
                     put("id", item.id); put("min", item.minimum); put("max", item.maximum); put("default", item.initial)
                 }) } })

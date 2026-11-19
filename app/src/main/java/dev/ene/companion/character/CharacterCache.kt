@@ -115,6 +115,7 @@ class CharacterCache(
         // 재접속 시 최신 상태를 서버에서 받는다. 디스크에는 모델 검증용 정보만 남긴다.
         return JsonObject(snapshot.json.toMutableMap().apply {
             put("settings", JsonObject(emptyMap())); put("parameters", JsonObject(emptyMap()))
+            remove("response_motion")
             put("state_revision", JsonPrimitive(1)); put("settings_revision", JsonPrimitive(1)); put("action_seq", JsonPrimitive(0))
             put("default_expression", base)
             put("head_pat_defaults", buildJsonObject { put("active", base); put("end", base) })

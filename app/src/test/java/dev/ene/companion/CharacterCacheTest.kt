@@ -13,8 +13,8 @@ class CharacterCacheTest {
     @get:Rule val temporary = TemporaryFolder()
     private val identity = "1".repeat(64)
     private fun snapshot(bytes: ByteArray) = CharacterSnapshot.parse(CharacterFixtures.manifest(bytes))
-    private fun store(cache: CharacterCache, bytes: ByteArray) = cache.begin(identity, snapshot(bytes)).use { ticket ->
-        ticket.open(snapshot(bytes).assets.single().id).use { it.write(bytes) }
+    private fun store(cache: CharacterCache, bytes: ByteArray, model: CharacterSnapshot = snapshot(bytes)) = cache.begin(identity, model).use { ticket ->
+        ticket.open(model.assets.single().id).use { it.write(bytes) }
         ticket.commit()
     }
 
@@ -22,10 +22,12 @@ class CharacterCacheTest {
         val root = temporary.newFolder("privacy-cache")
         val cache = CharacterCache(root)
         val bytes = "{\"synthetic\":7}".toByteArray()
-        val mount = store(cache, bytes)
+        val model = CharacterSnapshot.parse(CharacterFixtures.changed(CharacterFixtures.manifest(bytes), "response_motion", CharacterFixtures.responseMotion()))
+        val mount = store(cache, bytes, model)
         val descriptor = Json.parseToJsonElement(File(root, "$identity/${snapshot(bytes).modelVersion}/manifest.json").readText()).jsonObject
         assertTrue(descriptor.getValue("settings").jsonObject.isEmpty())
         assertTrue(descriptor.getValue("parameters").jsonObject.isEmpty())
+        assertFalse(descriptor.containsKey("response_motion"))
         assertEquals(0L, descriptor.getValue("action_seq").jsonPrimitive.long)
         assertEquals(1L, descriptor.getValue("state_revision").jsonPrimitive.long)
         assertEquals(1L, descriptor.getValue("settings_revision").jsonPrimitive.long)

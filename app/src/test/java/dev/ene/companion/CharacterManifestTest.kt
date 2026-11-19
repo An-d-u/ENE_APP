@@ -9,6 +9,12 @@ import java.security.MessageDigest
 /** 실제 모델이 아닌 합성 목록으로 전달 계약과 자산 무결성 경계만 검사한다. */
 internal object CharacterFixtures {
     fun hash(bytes: ByteArray) = MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
+    fun responseMotion() = buildJsonObject {
+        put("mode", "accent"); put("preset", "gentle"); put("enabled", true)
+        put("head", 0); put("body", 2); put("gestureHead", 1.5); put("gestureBody", 0.5)
+        put("repeatLimit", 3)
+        put("emotionOverrides", buildJsonObject { put("normal", "none"); put("bright", "joy") })
+    }
     fun manifest(payload: ByteArray = "{}".toByteArray(), revision: Long = 1): String {
         val digest = hash(payload)
         val assets = buildJsonArray { add(buildJsonObject {
@@ -59,6 +65,31 @@ class CharacterManifestTest {
         rejected(CharacterFixtures.changed(raw, "model_version", JsonPrimitive("a".repeat(64))))
     }
 
+    @Test fun readySnapshotForwardsOnlyPresentResponseMotionToRenderer() {
+        val legacy = CharacterFixtures.manifest()
+        assertFalse(CharacterSnapshot.parse(legacy).json.containsKey("response_motion"))
+        val custom = CharacterFixtures.changed(legacy, "expression_ids", buildJsonArray { add("normal"); add("Soft Smile #2") })
+        val overrides = buildJsonObject { put("normal", "none"); put("Soft Smile #2", "joy") }
+        val motion = JsonObject(CharacterFixtures.responseMotion() + ("emotionOverrides" to overrides))
+        val snapshot = CharacterSnapshot.parse(CharacterFixtures.changed(custom, "response_motion", motion))
+        assertEquals(motion, snapshot.json["response_motion"])
+    }
+
+    @Test fun responseMotionRejectsUnknownModelExpressionsAndInvalidConfiguration() {
+        val motion = CharacterFixtures.responseMotion()
+        for ((key, value) in listOf(
+            "mode" to JsonPrimitive("custom"), "enabled" to JsonPrimitive("true"), "preset" to JsonPrimitive("other"),
+            "repeatLimit" to JsonPrimitive(4), "repeatLimit" to JsonPrimitive(1.5),
+            "head" to JsonPrimitive(-0.1), "body" to JsonPrimitive(2.1),
+            "gestureHead" to JsonPrimitive("1.0"), "gestureBody" to JsonPrimitive(false),
+            "emotionOverrides" to buildJsonObject { put("other model", "joy") },
+            "emotionOverrides" to buildJsonObject { put("bright", "unknown_clip") },
+            "unknown" to JsonPrimitive("synthetic")
+        )) {
+            rejected(CharacterFixtures.changed(CharacterFixtures.manifest(), "response_motion", JsonObject(motion + (key to value))))
+        }
+    }
+
     @Test fun unknownParametersBoundsAndDuplicateAssetIdsAreRejected() {
         val raw = CharacterFixtures.manifest()
         rejected(CharacterFixtures.changed(raw, "parameters", buildJsonObject { put("Missing", 0.0) }))
@@ -86,5 +117,6 @@ class CharacterManifestTest {
         val snapshot = CharacterSnapshot.parse(JsonObject(source).toString())
         assertNull(snapshot.modelVersion)
         assertTrue(snapshot.assets.isEmpty())
+        rejected(CharacterFixtures.changed(snapshot.json.toString(), "response_motion", CharacterFixtures.responseMotion()))
     }
 }

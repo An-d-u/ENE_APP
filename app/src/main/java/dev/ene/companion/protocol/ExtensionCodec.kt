@@ -30,6 +30,9 @@ object ExtensionCodec {
     private val intSettings = mapOf("head_pat_fade_in_ms" to (50L to 1000L), "head_pat_fade_out_ms" to (50L to 1200L),
         "head_pat_end_emotion_duration_sec" to (1L to 30L))
     private val expressionSettings = setOf("head_pat_active_emotion_custom", "head_pat_end_emotion_custom")
+    private val motionStrengths = listOf("head", "body", "gestureHead", "gestureBody")
+    private val emotionMotions = setOf("joy", "shy", "sad", "confused", "angry", "worried", "sulk", "smug",
+        "love", "pervert", "pathetic", "eyeclose", "dizzy", "none")
 
     fun wireLimit(kind: String): Int = if (kind in smallTypes || kind in intervalTypes) 2048 else if (kind == "character_settings_patch") 49152 else 65536
 
@@ -74,6 +77,22 @@ object ExtensionCodec {
                 "idle_synthetic_gesture_frequency" -> put(key, choice(item, setOf("low", "normal", "high")))
                 else -> throw ProtocolException()
             }
+        }
+    }
+
+    /** PC에서 확정한 현재 모델 설정만 WebView로 보낸다. */
+    internal fun normalizeResponseMotion(value: JsonElement, expressions: List<String>): JsonObject {
+        val motion = obj(value)
+        if (motion.keys != setOf("mode", "enabled", "preset", "repeatLimit", "emotionOverrides") + motionStrengths) throw ProtocolException()
+        val overrides = obj(motion["emotionOverrides"])
+        if (!expressions.containsAll(overrides.keys)) throw ProtocolException()
+        return buildJsonObject {
+            put("mode", choice(motion["mode"], setOf("classic", "accent")))
+            put("enabled", bool(motion["enabled"]))
+            put("preset", choice(motion["preset"], setOf("standard", "restrained", "lively", "gentle")))
+            for (key in motionStrengths) put(key, number(motion[key], 0.0, 2.0))
+            put("repeatLimit", ProtocolCodec.integer(motion["repeatLimit"], 0, 3))
+            put("emotionOverrides", buildJsonObject { for ((key, clip) in overrides) put(key, choice(clip, emotionMotions)) })
         }
     }
 
@@ -204,9 +223,14 @@ object ExtensionCodec {
             }
             "character_action" -> {
                 put("action_seq", ProtocolCodec.integer(body["action_seq"], 1))
-                put("kind", choice(body["kind"], setOf("expression", "gesture")))
+                val action = choice(body["kind"], setOf("expression", "gesture"))
+                put("kind", action)
                 put("action_id", ProtocolCodec.text(body["action_id"], 128, nonblank = true))
                 put("duration_ms", ProtocolCodec.integer(body["duration_ms"], 0, 30000))
+                if ("response_motion" in body) {
+                    if (action != "expression") throw ProtocolException()
+                    put("response_motion", bool(body["response_motion"]))
+                }
             }
             "character_playback" -> {
                 for (key in listOf("conversation_id", "message_id", "utterance_id")) put(key, ProtocolCodec.uuid(body[key]))

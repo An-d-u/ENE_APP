@@ -16,7 +16,7 @@ class MediaPrivacyPolicyTest {
         val localCore = "lib/live2dcubismcore.min.js"
         val allowed = manifest.getValue("files").jsonArray.map { it.jsonObject.getValue("target").jsonPrimitive.content }
             .filter { it != localCore || localCore in names }.toSet() + "import-manifest.json"
-        assertEquals(21 + if (localCore in names) 1 else 0, names.size)
+        assertEquals(23 + if (localCore in names) 1 else 0, names.size)
         assertEquals(allowed, names.toSet())
         for (name in names) assertFalse(name.endsWith(".model3.json") || name.endsWith(".moc3") ||
             name in setOf("script.js", "runtime_bridge.js", "runtime_settings.js", "config.json", "api_keys.json", "ca.der"))

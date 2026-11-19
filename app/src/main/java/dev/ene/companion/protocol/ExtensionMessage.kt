@@ -254,7 +254,8 @@ data class CharacterAction(
     val action_seq: Long,
     val kind: String,
     val action_id: String,
-    val duration_ms: Int
+    val duration_ms: Int,
+    val response_motion: Boolean? = null
 ) : ExtensionMessage()
 
 @Serializable @SerialName("character_playback")

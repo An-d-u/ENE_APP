@@ -58,6 +58,18 @@ class ExtensionCodecTest {
         assertEquals(old, frozen)
     }
 
+    @Test fun onlyResponseExpressionCanForwardTheMotionFlag() {
+        val original = JsonObject(sample("character_action") + ("kind" to JsonPrimitive("expression")))
+        fun relay(message: JsonObject) = Json.parseToJsonElement(ProtocolCodec.encode(ProtocolCodec.decode(message.toString()))).jsonObject
+        assertFalse(relay(original).containsKey("response_motion"))
+        val reply = JsonObject(original + ("response_motion" to JsonPrimitive(true)))
+        assertEquals(JsonPrimitive(true), relay(reply)["response_motion"])
+        for (invalid in listOf(JsonObject(reply + ("kind" to JsonPrimitive("gesture"))),
+            JsonObject(reply + ("response_motion" to JsonPrimitive("true"))))) {
+            assertThrows(ProtocolException::class.java) { relay(invalid) }
+        }
+    }
+
     @Test fun guardRejectsStaleUnnegotiatedAndWrongDirection() {
         val body = sample("audio_prepared")
         val message = ProtocolCodec.decode(body.toString()) as ExtensionMessage
