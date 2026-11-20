@@ -58,6 +58,7 @@ internal fun ChatMessageGroup(message: PublicMessage, text: String, last: Boolea
                               expanded: Boolean, onToggleThought: () -> Unit,
                               onEdit: (String) -> Unit, onReroll: (String) -> Unit, onRetryThought: (String) -> Unit,
                               photos: List<dev.ene.companion.input.ChatThumbnail> = emptyList(),
+                              sceneExpanded: Boolean = false, onToggleScene: () -> Unit = {},
                               onMeasured: (BubbleGeometry) -> Unit) {
     val reporter = remember(text) { BubbleGeometryReporter() }
     reporter.onMeasured = onMeasured
@@ -65,13 +66,15 @@ internal fun ChatMessageGroup(message: PublicMessage, text: String, last: Boolea
     val alignment = if (user) Alignment.End else Alignment.Start
     val time = if (last) formatMessageTime(message.displayed_at) else null
     val hasThought = !user && thought?.status == "available"
+    val hasScene = !user && !thought?.visualSummary.isNullOrBlank()
     val action = messageAction(message.id, message.role, actions)
     val density = LocalDensity.current
     val measurer = rememberTextMeasurer()
     val timeWidth = time?.let { with(density) {
         measurer.measure(AnnotatedString(it), MaterialTheme.typography.labelSmall).size.width.toDp()
     } } ?: 0.dp
-    val metaWidth = maxOf(timeWidth, (if (action != null) 48.dp else 0.dp) + if (hasThought) 48.dp else 0.dp)
+    val actionCount = listOf(action != null, hasThought, hasScene).count { it }
+    val metaWidth = maxOf(timeWidth, 48.dp * actionCount)
     CompositionLocalProvider(LocalContentColor provides Color(0xFFD5DFEA)) {
         Column(Modifier.fillMaxWidth().padding(bottom = if (last) 14.dp else 6.dp)
             .onGloballyPositioned { reporter.group = it; reporter.publish() }, horizontalAlignment = alignment) {
@@ -80,7 +83,7 @@ internal fun ChatMessageGroup(message: PublicMessage, text: String, last: Boolea
                 val bubbleWidth = minOf(560.dp, if (!last || below) maxWidth * .88f else maxWidth - metaWidth - 8.dp)
                 val meta: @Composable () -> Unit = {
                     ChatMessageMeta(message.id, message.role, time, actions, hasThought, expanded,
-                        onToggleThought, onEdit, onReroll, Modifier.width(metaWidth))
+                        onToggleThought, onEdit, onReroll, Modifier.width(metaWidth), hasScene, sceneExpanded, onToggleScene)
                 }
                 Column(Modifier.align(if (user) Alignment.CenterEnd else Alignment.CenterStart), horizontalAlignment = alignment) {
                     Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -97,6 +100,11 @@ internal fun ChatMessageGroup(message: PublicMessage, text: String, last: Boolea
                 else if (message.attachment_unsupported == true) Text("첨부 내용은 PC에서 확인해 주세요.", style = MaterialTheme.typography.bodySmall)
                 ChatActionNotice(message.id, message.role, actions)
                 if (!user) MessageThought(thought, expanded) { onRetryThought(message.id) }
+                if (hasScene && sceneExpanded) {
+                    HorizontalDivider()
+                    Text("본 장면", Modifier.padding(top = 8.dp), style = MaterialTheme.typography.labelMedium)
+                    Text(thought!!.visualSummary, Modifier.padding(vertical = 8.dp), style = MaterialTheme.typography.bodyMedium)
+                }
             }
         }
     }

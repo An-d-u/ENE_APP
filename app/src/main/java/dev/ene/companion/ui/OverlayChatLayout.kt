@@ -114,7 +114,7 @@ internal fun CompanionToolbar(status: String, registered: Boolean, commonSetting
                     DropdownMenuItem(text = { Text("휴대폰 배치") }, onClick = { expanded = false; onPlacement() })
                     DropdownMenuItem(text = { Text("배경 및 효과") }, onClick = { select("background") })
                     DropdownMenuItem(text = { Text("캐릭터 공통 설정") }, enabled = commonSettingsEnabled, onClick = { select("character") })
-                    DropdownMenuItem(text = { Text("자동 관찰 간격") }, onClick = { select("observation-intervals") })
+                    DropdownMenuItem(text = { Text("화면 관찰 설정") }, onClick = { select("observation-intervals") })
                     HorizontalDivider()
                     DropdownMenuItem(text = { Text("등록 해제", color = MaterialTheme.colorScheme.error) }, enabled = registered, onClick = { select("forget") })
                 }

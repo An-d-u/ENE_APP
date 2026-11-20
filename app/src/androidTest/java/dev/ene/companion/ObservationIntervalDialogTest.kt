@@ -19,8 +19,8 @@ class ObservationIntervalDialogTest {
         var submitted: ObservationIntervals? = null
         compose.setContent {
             MaterialTheme {
-                ObservationIntervalDialog(state.value, true, { sample, request ->
-                    submitted = ObservationIntervals(sample, request)
+                ObservationIntervalDialog(state.value, true, { sample, request, turns ->
+                    submitted = ObservationIntervals(sample, request, turns)
                     state.value = state.value.copy(saving = true)
                 }, {}, {})
             }
@@ -43,9 +43,32 @@ class ObservationIntervalDialogTest {
 
     @Test fun disconnectedDialogDoesNotShowUnconfirmedValues() {
         compose.setContent {
-            MaterialTheme { ObservationIntervalDialog(ObservationIntervalsView(), false, { _, _ -> }, {}, {}) }
+            MaterialTheme { ObservationIntervalDialog(ObservationIntervalsView(), false, { _, _, _ -> }, {}, {}) }
         }
         compose.onNodeWithText("PC ENE에 연결하면 간격을 조절할 수 있습니다.").assertExists()
         compose.onAllNodes(hasSetTextAction()).assertCountEquals(0)
+    }
+
+    @Test fun contextTurnsAcceptZeroAndWaitForPcConfirmation() {
+        val state = mutableStateOf(ObservationIntervalsView(supported = true, loaded = true,
+            intervals = ObservationIntervals(30, 300, 5)))
+        var submitted: Int? = null
+        compose.setContent { MaterialTheme {
+            ObservationIntervalDialog(state.value, true, { _, _, turns ->
+                submitted = turns
+                state.value = state.value.copy(saving = true)
+            }, {}, {})
+        } }
+        val input = compose.onNode(hasSetTextAction() and hasText("화면 정보 유지 턴 수"))
+        val apply = compose.onNodeWithText("적용")
+        input.performScrollTo().performTextReplacement("21")
+        apply.assertIsNotEnabled()
+        input.performTextReplacement("0")
+        apply.performClick()
+        compose.runOnIdle { assertEquals(0, submitted) }
+        input.assertIsNotEnabled()
+        compose.runOnIdle { state.value = state.value.copy(saving = false,
+            intervals = state.value.intervals.copy(visualContextTurns = 0)) }
+        compose.onNodeWithText("PC와 휴대폰에 적용했습니다.").assertExists()
     }
 }

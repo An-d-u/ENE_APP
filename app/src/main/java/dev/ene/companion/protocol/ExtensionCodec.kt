@@ -124,6 +124,7 @@ object ExtensionCodec {
                 if (kind != "observation_intervals_state" || "query_id" in body) put("query_id", ProtocolCodec.uuid(body["query_id"]))
                 if (kind != "observation_intervals_get") {
                     for (key in listOf("sample_seconds", "request_seconds")) put(key, ProtocolCodec.integer(body[key], 1, 86_400))
+                    if ("visual_context_turns" in body) put("visual_context_turns", ProtocolCodec.integer(body["visual_context_turns"], 0, 20))
                 }
                 if (kind == "observation_intervals_state") {
                     put("revision", ProtocolCodec.integer(body["revision"], 1))
@@ -158,6 +159,7 @@ object ExtensionCodec {
                     val text = ProtocolCodec.text(body["text"], 8192)
                     if ((status == "available" && text.isBlank()) || (status != "available" && text.isNotEmpty())) throw ProtocolException()
                     put("status", status); put("text", text)
+                    if ("visual_summary" in body) put("visual_summary", ProtocolCodec.text(body["visual_summary"], 2048))
                 }
             }
             in chatTypes -> {

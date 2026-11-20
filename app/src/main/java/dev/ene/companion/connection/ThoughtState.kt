@@ -3,7 +3,7 @@ package dev.ene.companion.connection
 import dev.ene.companion.protocol.*
 import java.util.UUID
 
-data class ThoughtContent(val status: String, val text: String = "") {
+data class ThoughtContent(val status: String, val text: String = "", val visualSummary: String = "") {
     override fun toString() = "ThoughtContent(status=$status)"
 }
 
@@ -77,6 +77,6 @@ internal class ThoughtState(private val ready: Ready, private val nowMillis: () 
         pending = null
         if (message.message_id !in visibleIds) return
         entries = entries + (message.message_id to if (nowMillis() - pendingSince >= 10_000 || message.status == "stale")
-            ThoughtContent("error") else ThoughtContent(message.status, message.text))
+            ThoughtContent("error") else ThoughtContent(message.status, message.text, message.visual_summary))
     }
 }

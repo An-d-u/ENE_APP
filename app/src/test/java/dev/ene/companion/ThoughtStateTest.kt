@@ -78,4 +78,20 @@ class ThoughtStateTest {
         state.synchronize(snapshot().copy(conversationId = id(80)))
         state.receive(response(query)); assertTrue(state.entries.isEmpty())
     }
+
+    @Test fun visualSummaryLoadsWithoutThoughtAndExpiresWithItsMessage() {
+        val state = active()
+        val query = requireNotNull(state.nextRequest())
+        val answer = response(query).copy(status = "empty", text = "", visual_summary = "합성 도형 두 개가 보인다.")
+        state.receive(answer)
+        assertEquals(answer.visual_summary, state.entries[query.message_id]?.visualSummary)
+        assertFalse(state.entries[query.message_id].toString().contains(answer.visual_summary))
+        state.synchronize(snapshot(4))
+        state.receive(answer)
+        assertTrue(state.entries.isEmpty())
+        now += 100
+        val current = requireNotNull(state.nextRequest())
+        state.receive(answer.copy(query_id = current.query_id, conversation_revision = 4, status = "stale"))
+        assertEquals("", state.entries[current.message_id]?.visualSummary)
+    }
 }

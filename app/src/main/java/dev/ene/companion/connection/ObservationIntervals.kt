@@ -5,8 +5,12 @@ import java.util.UUID
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
-data class ObservationIntervals(val sampleSeconds: Int = 30, val requestSeconds: Int = 300) {
-    companion object { val SECONDS_RANGE = 1..86_400 }
+data class ObservationIntervals(val sampleSeconds: Int = 30, val requestSeconds: Int = 300,
+                                val visualContextTurns: Int? = null) {
+    companion object {
+        val SECONDS_RANGE = 1..86_400
+        val CONTEXT_TURNS_RANGE = 0..20
+    }
 }
 
 data class ObservationIntervalsView(
@@ -51,10 +55,12 @@ internal class SharedObservationIntervals(private val nowMillis: () -> Long) {
 
     fun refresh() = request(null)
 
-    fun save(sample: Int, request: Int) {
+    fun save(sample: Int, request: Int, contextTurns: Int? = null) {
         if (sample !in ObservationIntervals.SECONDS_RANGE || request !in ObservationIntervals.SECONDS_RANGE ||
             !mutable.value.loaded) return
-        request(ObservationIntervals(sample, request))
+        if (contextTurns != null && (contextTurns !in ObservationIntervals.CONTEXT_TURNS_RANGE ||
+                mutable.value.intervals.visualContextTurns == null)) return
+        request(ObservationIntervals(sample, request, contextTurns))
     }
 
     private fun request(intervals: ObservationIntervals?) {
@@ -68,7 +74,7 @@ internal class SharedObservationIntervals(private val nowMillis: () -> Long) {
             ObservationIntervalsGet(c.registrationGeneration, c.serverEpoch, c.connectionGeneration, c.conversationId, id)
         } else {
             ObservationIntervalsSet(c.registrationGeneration, c.serverEpoch, c.connectionGeneration, c.conversationId, id,
-                intervals.sampleSeconds, intervals.requestSeconds)
+                intervals.sampleSeconds, intervals.requestSeconds, intervals.visualContextTurns)
         }
         if (sender?.invoke(message) != true) fail()
     }
@@ -95,7 +101,8 @@ internal class SharedObservationIntervals(private val nowMillis: () -> Long) {
         }
         if (message.revision >= revision) {
             revision = message.revision
-            next = next.copy(loaded = true, intervals = ObservationIntervals(message.sample_seconds, message.request_seconds))
+            next = next.copy(loaded = true, intervals = ObservationIntervals(
+                message.sample_seconds, message.request_seconds, message.visual_context_turns))
         }
         mutable.value = next
     }

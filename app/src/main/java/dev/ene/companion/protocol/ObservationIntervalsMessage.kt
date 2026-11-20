@@ -21,6 +21,7 @@ data class ObservationIntervalsSet(
     val query_id: String,
     val sample_seconds: Int,
     val request_seconds: Int,
+    val visual_context_turns: Int? = null,
 ) : ExtensionMessage()
 
 @Serializable @SerialName("observation_intervals_state")
@@ -34,4 +35,5 @@ data class ObservationIntervalsState(
     val revision: Long,
     val saved: Boolean,
     val query_id: String? = null,
+    val visual_context_turns: Int? = null,
 ) : ExtensionMessage()

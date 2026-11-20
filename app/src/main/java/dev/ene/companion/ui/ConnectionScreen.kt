@@ -141,7 +141,7 @@ fun ConnectionScreen(repository: ConnectionRepository, layoutController: ChatLay
         "observation-intervals" -> {
             val timings by repository.observationIntervals.collectAsStateWithLifecycle()
             ObservationIntervalDialog(timings, state.phase == ConnectionPhase.CONNECTED,
-                { sample, request -> repository.setObservationIntervals(sample, request) },
+                { sample, request, turns -> repository.setObservationIntervals(sample, request, turns) },
                 { repository.refreshObservationIntervals() }, { dialog = null })
         }
         "background" -> backgroundController?.let { BackgroundDialog(it) { dialog = null } }

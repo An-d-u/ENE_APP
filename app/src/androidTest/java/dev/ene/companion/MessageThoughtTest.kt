@@ -36,4 +36,29 @@ class MessageThoughtTest {
         compose.runOnIdle { content = ThoughtContent("empty") }
         compose.onNodeWithContentDescription("생각 보기").assertDoesNotExist()
     }
+
+    @Test fun sceneAndThoughtExpandIndependentlyAndChangedSummaryCollapses() {
+        var content by mutableStateOf(ThoughtContent("available", "합성 공의 위치를 비교한다.", "PC 창에 합성 공 세 개가 보인다."))
+        val message = PublicMessage("synthetic-scene", "assistant", "합성 응답입니다.", "2030-01-01T00:00:00Z")
+        compose.setContent { MaterialTheme {
+            ChatHistory(ConnectionViewState(messages = listOf(message), thoughts = mapOf(message.id to content)),
+                Modifier.fillMaxSize(), {}, {})
+        } }
+        compose.onNodeWithContentDescription("화면 요약 보기").assertHeightIsAtLeast(48.dp).performClick()
+        compose.onNodeWithText("본 장면").assertIsDisplayed()
+        compose.onNodeWithText("PC 창에 합성 공 세 개가 보인다.").assertIsDisplayed()
+        compose.onNodeWithText("합성 공의 위치를 비교한다.").assertDoesNotExist()
+        compose.onNodeWithContentDescription("생각 보기").performClick()
+        compose.onNodeWithText("합성 공의 위치를 비교한다.").assertIsDisplayed()
+        compose.onNodeWithContentDescription("화면 요약 접기").performClick()
+        compose.onNodeWithText("PC 창에 합성 공 세 개가 보인다.").assertDoesNotExist()
+        compose.onNodeWithText("합성 공의 위치를 비교한다.").assertIsDisplayed()
+        compose.runOnIdle { content = ThoughtContent("empty", visualSummary = "후면 카메라에 합성 모형이 보인다.") }
+        compose.onNodeWithContentDescription("생각 보기").assertDoesNotExist()
+        compose.onNodeWithContentDescription("화면 요약 보기").performClick()
+        compose.onNodeWithText("후면 카메라에 합성 모형이 보인다.").assertIsDisplayed()
+        compose.runOnIdle { content = content.copy(visualSummary = "후면 카메라에 합성 모형 두 개가 보인다.") }
+        compose.onNodeWithText("후면 카메라에 합성 모형 두 개가 보인다.").assertDoesNotExist()
+        compose.onNodeWithContentDescription("화면 요약 보기").assertExists()
+    }
 }

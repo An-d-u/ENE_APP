@@ -25,6 +25,7 @@ data class ThoughtResponse(
     val message_id: String,
     val status: String,
     val text: String,
+    val visual_summary: String = "",
 ) : ExtensionMessage()
 
 @Serializable @SerialName("thought_invalidated")

@@ -67,8 +67,8 @@ internal fun chatActionProgress(state: ConnectionViewState): String? {
     }
 }
 
-private data class ExpandedThought(val message: PublicMessage, val content: ThoughtContent) {
-    override fun toString() = "ExpandedThought"
+private data class ExpandedMessageDetail(val message: PublicMessage, val content: ThoughtContent) {
+    override fun toString() = "ExpandedMessageDetail"
 }
 
 /** 동일 ID의 답변 교체에서도 기존 스크롤 위치와 마지막 진행 항목을 유지한다. */
@@ -89,17 +89,19 @@ fun ChatHistory(state: ConnectionViewState, modifier: Modifier = Modifier, onEdi
                 ?: MessageChunks(message.text, split).also { chunkCache[message.id] = it })
         }.also { chunkCache.keys.retainAll(state.messages.map { it.id }.toSet()) }
     }
-    val expandedThoughts = remember { mutableStateMapOf<String, ExpandedThought>() }
+    val expandedThoughts = remember { mutableStateMapOf<String, ExpandedMessageDetail>() }
+    val expandedScenes = remember { mutableStateMapOf<String, ExpandedMessageDetail>() }
     LaunchedEffect(state.messages, state.thoughts) {
         val messages = state.messages.associateBy { it.id }
-        expandedThoughts.keys.toList().forEach { id ->
-            val saved = expandedThoughts[id]
-            if (saved?.message != messages[id] || saved?.content != state.thoughts[id]) expandedThoughts.remove(id)
+        for (expanded in listOf(expandedThoughts, expandedScenes)) expanded.keys.toList().forEach { id ->
+            val saved = expanded[id]
+            if (saved?.message != messages[id] || saved?.content != state.thoughts[id]) expanded.remove(id)
         }
     }
     val scroller = rememberChatHistoryScroller(listState, measurements)
     val density = LocalDensity.current
-    val layoutKey = listOf(state.chatActions, state.thoughts, state.chatImages, expandedThoughts.toMap(), density.density, density.fontScale)
+    val layoutKey = listOf(state.chatActions, state.thoughts, state.chatImages, expandedThoughts.toMap(),
+        expandedScenes.toMap(), density.density, density.fontScale)
     SideEffect { scroller.update(state, groups, split, progress, layoutKey) }
     val visibleCallback by rememberUpdatedState(onVisibleThoughts)
     LaunchedEffect(listState) {
@@ -121,12 +123,18 @@ fun ChatHistory(state: ConnectionViewState, modifier: Modifier = Modifier, onEdi
                 val key = messageBubbleKey(message.id, index, index == chunks.lastIndex) to split
                 DisposableEffect(key) { onDispose { measurements.remove(key) } }
                 val thought = state.thoughts[message.id]
-                val expansion = thought?.takeIf { it.status == "available" }?.let { ExpandedThought(message, it) }
+                val expansion = thought?.takeIf { it.status == "available" }?.let { ExpandedMessageDetail(message, it) }
+                val scene = thought?.takeIf { it.visualSummary.isNotBlank() }?.let { ExpandedMessageDetail(message, it) }
                 ChatMessageGroup(message, chunks[index], index == chunks.lastIndex, state.chatActions, thought,
                     expansion != null && expandedThoughts[message.id] == expansion, {
                         if (expandedThoughts[message.id] == expansion) expandedThoughts.remove(message.id)
                         else if (expansion != null) expandedThoughts[message.id] = expansion
-                    }, onEdit, onReroll, onRetryThought, state.chatImages[message.id].orEmpty()) { measurements[key] = MeasuredBubble(parts.starts[index], it) }
+                    }, onEdit, onReroll, onRetryThought, state.chatImages[message.id].orEmpty(),
+                    sceneExpanded = scene != null && expandedScenes[message.id] == scene,
+                    onToggleScene = {
+                        if (expandedScenes[message.id] == scene) expandedScenes.remove(message.id)
+                        else if (scene != null) expandedScenes[message.id] = scene
+                    }) { measurements[key] = MeasuredBubble(parts.starts[index], it) }
             }
         }
         if (progress != null) item(key = "chat-action-progress") {

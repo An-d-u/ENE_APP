@@ -13,6 +13,32 @@ import org.junit.Test
 
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class ObservationIntervalsRepositoryTest {
+    @Test fun contextTurnsOnlyUseConfirmedValuesAndOldPcOmitsThem() {
+        val shared = SharedObservationIntervals { 0L }
+        val outgoing = mutableListOf<WireMessage>()
+        val c = ExtensionContext(1, epoch, id(40), conversation)
+        shared.connect(c) { outgoing.add(it) }
+        val get = outgoing.single() as ObservationIntervalsGet
+        val old = ObservationIntervalsState(1, epoch, id(40), conversation, 30, 300, 1, true, get.query_id)
+        shared.receive(old)
+        assertNull(shared.state.value.intervals.visualContextTurns)
+        shared.save(12, 90)
+        val oldSet = outgoing.last() as ObservationIntervalsSet
+        assertFalse(ProtocolCodec.encode(oldSet).contains("visual_context_turns"))
+        shared.receive(old.copy(query_id = oldSet.query_id))
+        shared.receive(old.copy(query_id = null, revision = 2, visual_context_turns = 5))
+        shared.save(30, 300, 0)
+        val update = outgoing.last() as ObservationIntervalsSet
+        assertEquals(0, update.visual_context_turns)
+        assertEquals(5, shared.state.value.intervals.visualContextTurns)
+        shared.receive(old.copy(query_id = update.query_id, revision = 3, visual_context_turns = 0))
+        assertEquals(0, shared.state.value.intervals.visualContextTurns)
+        assertEquals(update, ProtocolCodec.decode(ProtocolCodec.encode(update)))
+        for (invalid in listOf(-1, 21)) assertThrows(ProtocolException::class.java) {
+            ProtocolCodec.encode(update.copy(visual_context_turns = invalid))
+        }
+    }
+
     @Test fun lookupTimeoutCanRetryAndDiscardsRepliesFromThePreviousConnection() {
         var now = 0L
         val shared = SharedObservationIntervals { now }

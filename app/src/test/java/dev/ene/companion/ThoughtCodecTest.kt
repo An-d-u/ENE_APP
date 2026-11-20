@@ -24,4 +24,15 @@ class ThoughtCodecTest {
             assertThrows(ProtocolException::class.java) { ProtocolCodec.encode(value) }
         }
     }
+
+    @Test fun visualSummaryIsOptionalAndIndependentOfThoughtVisibility() {
+        val summary = response.copy(status = "empty", text = "", visual_summary = "합성 퍼즐에 파란 블록이 보인다.")
+        assertEquals(summary, ProtocolCodec.decode(ProtocolCodec.encode(summary)))
+        val old = ProtocolCodec.encode(response).replace(",\"visual_summary\":\"\"", "")
+        assertEquals("", (ProtocolCodec.decode(old) as ThoughtResponse).visual_summary)
+        assertThrows(ProtocolException::class.java) {
+            ProtocolCodec.encode(summary.copy(visual_summary = "가".repeat(683)))
+        }
+        assertFalse(summary.toString().contains(summary.visual_summary))
+    }
 }

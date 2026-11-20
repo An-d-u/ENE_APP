@@ -81,8 +81,8 @@ class ConnectionRepository(
     fun refreshObservationIntervals() = command {
         if (mutableState.value.phase == ConnectionPhase.CONNECTED) sharedIntervals.refresh()
     }
-    fun setObservationIntervals(sampleSeconds: Int, requestSeconds: Int) = command {
-        if (mutableState.value.phase == ConnectionPhase.CONNECTED) sharedIntervals.save(sampleSeconds, requestSeconds)
+    fun setObservationIntervals(sampleSeconds: Int, requestSeconds: Int, contextTurns: Int? = null) = command {
+        if (mutableState.value.phase == ConnectionPhase.CONNECTED) sharedIntervals.save(sampleSeconds, requestSeconds, contextTurns)
     }
 
     private val camera = CameraSharing(scope)
