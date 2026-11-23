@@ -34,7 +34,7 @@ internal fun ObservationIntervalDialog(state: ObservationIntervalsView, connecte
     AlertDialog(onDismissRequest = onClose, title = { Text("화면 관찰 설정") }, text = {
         Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             if (loaded) {
-                Text("PC 창과 휴대폰 카메라에 함께 적용합니다. 기본 간격은 각각 30초와 300초(5분)입니다.")
+                Text("PC 화면과 휴대폰 카메라에 함께 적용합니다. 기본 간격은 각각 30초와 300초(5분)입니다.")
                 IntervalField("화면 변화 확인 간격 (초)", sample, sampleSeconds != null, !state.saving) { sample = it }
                 IntervalField("모델 호출 최소 간격 (초)", request, requestSeconds != null, !state.saving) { request = it }
                 if (supportsContext) {
