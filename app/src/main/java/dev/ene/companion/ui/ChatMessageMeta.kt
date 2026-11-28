@@ -18,7 +18,7 @@ import dev.ene.companion.connection.ChatActionsViewState
 internal fun ChatMessageMeta(id: String, role: String, time: String?, actions: ChatActionsViewState,
                              hasThought: Boolean, expanded: Boolean, onToggleThought: () -> Unit,
                              onEdit: (String) -> Unit, onReroll: (String) -> Unit, modifier: Modifier = Modifier,
-                             hasScene: Boolean = false, sceneExpanded: Boolean = false, onToggleScene: () -> Unit = {}) {
+                             hasScene: Boolean, onOpenScene: () -> Unit) {
     Column(modifier, horizontalAlignment = if (role == "user") Alignment.End else Alignment.Start) {
         time?.let { Text(it, Modifier.testTag("message-time"), style = MaterialTheme.typography.labelSmall) }
         Row {
@@ -26,10 +26,8 @@ internal fun ChatMessageMeta(id: String, role: String, time: String?, actions: C
                 modifier = Modifier.size(48.dp).semantics { stateDescription = if (expanded) "생각 펼쳐짐" else "생각 접힘" }) {
                 Icon(painterResource(R.drawable.ic_chat_thought), if (expanded) "생각 접기" else "생각 보기", Modifier.size(18.dp))
             }
-            if (hasScene) IconButton(onClick = onToggleScene,
-                modifier = Modifier.size(48.dp).semantics { stateDescription = if (sceneExpanded) "화면 요약 펼쳐짐" else "화면 요약 접힘" }) {
-                Icon(painterResource(android.R.drawable.ic_menu_camera),
-                    if (sceneExpanded) "화면 요약 접기" else "화면 요약 보기", Modifier.size(20.dp))
+            if (hasScene) IconButton(onClick = onOpenScene, modifier = Modifier.size(48.dp)) {
+                Icon(painterResource(R.drawable.ic_chat_scene), "화면 요약 보기", Modifier.size(18.dp))
             }
             ChatMessageActions(id, role, actions, onEdit, onReroll)
         }

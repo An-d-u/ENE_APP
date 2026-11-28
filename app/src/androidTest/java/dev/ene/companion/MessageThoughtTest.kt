@@ -44,14 +44,18 @@ class MessageThoughtTest {
             ChatHistory(ConnectionViewState(messages = listOf(message), thoughts = mapOf(message.id to content)),
                 Modifier.fillMaxSize(), {}, {})
         } }
+        val bubble = compose.onNodeWithTag("chat-bubble")
+        val bounds = bubble.getUnclippedBoundsInRoot()
+        compose.onNodeWithText("본 장면").assertDoesNotExist()
         compose.onNodeWithContentDescription("화면 요약 보기").assertHeightIsAtLeast(48.dp).performClick()
+        compose.onNode(isDialog()).assertExists()
         compose.onNodeWithText("본 장면").assertIsDisplayed()
         compose.onNodeWithText("PC 창에 합성 공 세 개가 보인다.").assertIsDisplayed()
         compose.onNodeWithText("합성 공의 위치를 비교한다.").assertDoesNotExist()
-        compose.onNodeWithContentDescription("생각 보기").performClick()
-        compose.onNodeWithText("합성 공의 위치를 비교한다.").assertIsDisplayed()
-        compose.onNodeWithContentDescription("화면 요약 접기").performClick()
+        org.junit.Assert.assertEquals(bounds, bubble.getUnclippedBoundsInRoot())
+        compose.onNodeWithText("닫기").performClick()
         compose.onNodeWithText("PC 창에 합성 공 세 개가 보인다.").assertDoesNotExist()
+        compose.onNodeWithContentDescription("생각 보기").performClick()
         compose.onNodeWithText("합성 공의 위치를 비교한다.").assertIsDisplayed()
         compose.runOnIdle { content = ThoughtContent("empty", visualSummary = "후면 카메라에 합성 모형이 보인다.") }
         compose.onNodeWithContentDescription("생각 보기").assertDoesNotExist()
@@ -60,5 +64,7 @@ class MessageThoughtTest {
         compose.runOnIdle { content = content.copy(visualSummary = "후면 카메라에 합성 모형 두 개가 보인다.") }
         compose.onNodeWithText("후면 카메라에 합성 모형 두 개가 보인다.").assertDoesNotExist()
         compose.onNodeWithContentDescription("화면 요약 보기").assertExists()
+        compose.runOnIdle { content = ThoughtContent("empty", visualSummary = "  ") }
+        compose.onNodeWithContentDescription("화면 요약 보기").assertDoesNotExist()
     }
 }

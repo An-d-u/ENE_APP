@@ -1,7 +1,9 @@
 package dev.ene.companion.ui
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -58,7 +60,6 @@ internal fun ChatMessageGroup(message: PublicMessage, text: String, last: Boolea
                               expanded: Boolean, onToggleThought: () -> Unit,
                               onEdit: (String) -> Unit, onReroll: (String) -> Unit, onRetryThought: (String) -> Unit,
                               photos: List<dev.ene.companion.input.ChatThumbnail> = emptyList(),
-                              sceneExpanded: Boolean = false, onToggleScene: () -> Unit = {},
                               onMeasured: (BubbleGeometry) -> Unit) {
     val reporter = remember(text) { BubbleGeometryReporter() }
     reporter.onMeasured = onMeasured
@@ -66,7 +67,9 @@ internal fun ChatMessageGroup(message: PublicMessage, text: String, last: Boolea
     val alignment = if (user) Alignment.End else Alignment.Start
     val time = if (last) formatMessageTime(message.displayed_at) else null
     val hasThought = !user && thought?.status == "available"
-    val hasScene = !user && !thought?.visualSummary.isNullOrBlank()
+    val summary = thought?.visualSummary.orEmpty()
+    val hasScene = message.role == "assistant" && summary.isNotBlank()
+    var sceneOpen by remember(message, summary) { mutableStateOf(false) }
     val action = messageAction(message.id, message.role, actions)
     val density = LocalDensity.current
     val measurer = rememberTextMeasurer()
@@ -83,7 +86,7 @@ internal fun ChatMessageGroup(message: PublicMessage, text: String, last: Boolea
                 val bubbleWidth = minOf(560.dp, if (!last || below) maxWidth * .88f else maxWidth - metaWidth - 8.dp)
                 val meta: @Composable () -> Unit = {
                     ChatMessageMeta(message.id, message.role, time, actions, hasThought, expanded,
-                        onToggleThought, onEdit, onReroll, Modifier.width(metaWidth), hasScene, sceneExpanded, onToggleScene)
+                        onToggleThought, onEdit, onReroll, Modifier.width(metaWidth), hasScene, onOpenScene = { sceneOpen = true })
                 }
                 Column(Modifier.align(if (user) Alignment.CenterEnd else Alignment.CenterStart), horizontalAlignment = alignment) {
                     Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -100,10 +103,11 @@ internal fun ChatMessageGroup(message: PublicMessage, text: String, last: Boolea
                 else if (message.attachment_unsupported == true) Text("첨부 내용은 PC에서 확인해 주세요.", style = MaterialTheme.typography.bodySmall)
                 ChatActionNotice(message.id, message.role, actions)
                 if (!user) MessageThought(thought, expanded) { onRetryThought(message.id) }
-                if (hasScene && sceneExpanded) {
-                    HorizontalDivider()
-                    Text("본 장면", Modifier.padding(top = 8.dp), style = MaterialTheme.typography.labelMedium)
-                    Text(thought!!.visualSummary, Modifier.padding(vertical = 8.dp), style = MaterialTheme.typography.bodyMedium)
+                if (hasScene && sceneOpen) {
+                    AlertDialog(onDismissRequest = { sceneOpen = false },
+                        title = { Text("본 장면") },
+                        text = { Text(summary, Modifier.verticalScroll(rememberScrollState())) },
+                        confirmButton = { TextButton(onClick = { sceneOpen = false }) { Text("닫기") } })
                 }
             }
         }
