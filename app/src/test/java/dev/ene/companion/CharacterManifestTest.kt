@@ -90,6 +90,22 @@ class CharacterManifestTest {
         }
     }
 
+    @Test fun overlapPercentageIsOptionalAndValidatedIndependentlyOfLegacyMotionKeys() {
+        val key = "emotion_motion_overlap_percent"
+        val legacy = CharacterFixtures.manifest()
+        val raw = CharacterFixtures.changed(legacy, "response_motion", CharacterFixtures.responseMotion())
+        assertFalse(CharacterSnapshot.parse(raw).json.containsKey(key))
+        for (percent in listOf(0, 28, 60, 100)) {
+            val snapshot = CharacterSnapshot.parse(CharacterFixtures.changed(raw, key, JsonPrimitive(percent)))
+            assertEquals(JsonPrimitive(percent), snapshot.json[key])
+            assertEquals(CharacterFixtures.responseMotion(), snapshot.json["response_motion"])
+        }
+        for (bad in listOf(JsonPrimitive(-1), JsonPrimitive(101), JsonPrimitive("60"), JsonPrimitive(0.5))) {
+            rejected(CharacterFixtures.changed(raw, key, bad))
+        }
+        rejected(CharacterFixtures.changed(legacy, key, JsonPrimitive(60)))
+    }
+
     @Test fun unknownParametersBoundsAndDuplicateAssetIdsAreRejected() {
         val raw = CharacterFixtures.manifest()
         rejected(CharacterFixtures.changed(raw, "parameters", buildJsonObject { put("Missing", 0.0) }))

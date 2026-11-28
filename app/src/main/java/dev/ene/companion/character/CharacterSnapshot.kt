@@ -84,6 +84,10 @@ class CharacterSnapshot private constructor(
                 if (status != "ready") throw CharacterException("invalid_manifest")
                 ExtensionCodec.normalizeResponseMotion(it, expressions)
             }
+            val overlapPercent = body["emotion_motion_overlap_percent"]?.let {
+                if (responseMotion == null) throw CharacterException("invalid_manifest")
+                ProtocolCodec.integer(it, 0, 100)
+            }
             val gestures = ids(body["gesture_ids"])
             val base = id(body["default_expression"])
             val patDefaults = body["head_pat_defaults"]?.let(::obj) ?: buildJsonObject {
@@ -140,6 +144,7 @@ class CharacterSnapshot private constructor(
                 put("settings", settings); put("parameters", buildJsonObject { parameters.forEach { (key, value) -> put(key, value) } })
                 put("head_pat_defaults", patDefaults)
                 if (responseMotion != null) put("response_motion", responseMotion)
+                if (overlapPercent != null) put("emotion_motion_overlap_percent", overlapPercent)
                 put("parameter_catalog", buildJsonArray { catalog.forEach { item -> add(buildJsonObject {
                     put("id", item.id); put("min", item.minimum); put("max", item.maximum); put("default", item.initial)
                 }) } })
